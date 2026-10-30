@@ -4,15 +4,15 @@ import XCTest
 final class BackendRulesTests: XCTestCase {
     private func backend() -> MockAlongBackend { MockAlongBackend() }
 
-    func testSeedHasLiveActivitiesAndNoExpiredOnes() async {
-        let snap = await backend().loadSnapshot()
+    func testSeedHasLiveActivitiesAndNoExpiredOnes() async throws {
+        let snap = try await backend().loadSnapshot()
         let live = snap.activities.filter { $0.isActive(at: .now) }
         XCTAssertGreaterThanOrEqual(live.count, 8)
         XCTAssertTrue(snap.activities.contains { $0.isExpired(at: .now) }, "past plans exist for the Past tab")
     }
 
-    func testPublicActivitiesAreRedactedForNonMembers() async {
-        let snap = await backend().loadSnapshot()
+    func testPublicActivitiesAreRedactedForNonMembers() async throws {
+        let snap = try await backend().loadSnapshot()
         let soho = snap.activities.first { $0.id == "act-soho" }!
         XCTAssertFalse(soho.hasPreciseAccess)
         XCTAssertEqual(soho.meetingDetails, "")
@@ -51,21 +51,21 @@ final class BackendRulesTests: XCTestCase {
 
     func testMessagingRequiresAcceptedRequest() async throws {
         let b = backend()
-        var snap = try await b.sendMessage(conversationID: "conv-priya", text: "  hello  ")
-        XCTAssertEqual(snap.messages.last?.text, "hello")
-        snap = try await b.leave(activityID: "act-park")
+        let sent = try await b.sendMessage(conversationID: "conv-priya", text: "  hello  ")
+        XCTAssertEqual(sent.text, "hello")
+        let snap = try await b.leave(activityID: "act-park")
         do { _ = try await b.sendMessage(conversationID: "conv-jonas", text: "hi"); XCTFail("chat stayed open after leaving") }
         catch AlongError.chatClosed {}
         XCTAssertEqual(snap.activities.first { $0.id == "act-park" }?.participantIDs.contains("me"), false)
     }
 
-    func testBlockingHidesPlansRequestsAndChats() async {
-        let snap = await backend().block(userID: "alex")
+    func testBlockingHidesPlansRequestsAndChats() async throws {
+        let snap = try await backend().block(userID: "alex")
         XCTAssertFalse(snap.activities.contains { $0.hostID == "alex" })
         XCTAssertFalse(snap.requests.contains { $0.activityID == "act-soho" })
-        let snap2 = await backend().block(userID: "emma")
+        let snap2 = try await backend().block(userID: "emma")
         XCTAssertFalse(snap2.requests.contains { $0.requesterID == "emma" })
-        let snap3 = await backend().block(userID: "priya")
+        let snap3 = try await backend().block(userID: "priya")
         XCTAssertFalse(snap3.conversations.contains { $0.participantIDs.contains("priya") })
     }
 

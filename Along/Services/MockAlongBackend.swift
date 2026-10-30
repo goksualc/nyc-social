@@ -1,11 +1,12 @@
 import Foundation
+import CoreLocation
 
 /// In-memory stand-in for the real backend.
 ///
 /// Everything in here is *simulated*. The rules (spot limits, blocking, redaction, chat gating) are
 /// enforced here so the UI can stay thin — but in production each one must be enforced on the server
 /// (Postgres RLS policies / edge functions), never trusted to the client. See `SafetyPolicy`.
-actor MockAlongBackend: AlongBackend {
+actor MockAlongBackend: AlongBackend, DemoService {
     private var db: MockDatabase
     private let clock: @Sendable () -> Date
 
@@ -69,13 +70,60 @@ actor MockAlongBackend: AlongBackend {
         return i
     }
 
-    // MARK: Auth
-
-    func signInDemo() async -> AlongSnapshot { snapshot() }
-
     // MARK: Activities
 
-    func loadSnapshot() async -> AlongSnapshot { snapshot() }
+    func loadSnapshot() async throws -> AlongSnapshot { snapshot() }
+
+    /// Same contract as the PostGIS `discover_activities` RPC: public, live, inside the box, overlapping the window.
+    func discover(_ query: DiscoveryQuery) async throws -> DiscoveryPage {
+        let now = clock()
+        let from = max(now, query.from ?? now)
+        func inBox(_ c: CLLocationCoordinate2D) -> Bool {
+            (query.minLat...query.maxLat).contains(c.latitude) && (query.minLng...query.maxLng).contains(c.longitude)
+        }
+        let all = snapshot().activities
+            .filter { a in
+                guard a.visibility == .public, a.isActive(at: now), a.endDate > from else { return false }
+                if let to = query.to, a.startDate >= to { return false }
+                if let kind = query.kind, a.kind != kind { return false }
+                if let (s, e) = a.routeEndpoints { return inBox(s) || inBox(e) }
+                return inBox(a.mapCoordinate)
+            }
+            .sorted { $0.startDate < $1.startDate }
+        let page = Array(all.dropFirst(query.offset).prefix(query.limit))
+        let hostIDs = Set(page.map(\.hostID))
+        return DiscoveryPage(activities: page, hosts: db.users.filter { hostIDs.contains($0.id) }, hasMore: all.count > query.offset + page.count)
+    }
+
+    func nearby(to center: Coordinate, radiusMeters: Double, kind: ActivityKind?, limit: Int) async throws -> DiscoveryPage {
+        let now = clock()
+        let found = snapshot().activities
+            .filter { $0.visibility == .public && $0.isActive(at: now) && (kind == nil || $0.kind == kind) }
+            .filter { Coordinate($0.mapCoordinate).distance(to: center) <= radiusMeters }
+            .sorted { Coordinate($0.mapCoordinate).distance(to: center) < Coordinate($1.mapCoordinate).distance(to: center) }
+        let page = Array(found.prefix(limit))
+        return DiscoveryPage(activities: page, hosts: [], hasMore: found.count > page.count)
+    }
+
+    func updateActivity(_ edit: ActivityEdit) async throws -> AlongSnapshot {
+        let i = try index(ofActivity: edit.activityID)
+        guard db.activities[i].hostID == me else { throw AlongError.notAllowed }
+        guard db.activities[i].isActive(at: clock()) else { throw AlongError.activityClosed }
+        let start = edit.startDate ?? db.activities[i].startDate
+        let end = edit.endDate ?? db.activities[i].endDate
+        guard end > start else { throw AlongError.invalidTimes }
+        if edit.startDate != nil, start < clock().addingTimeInterval(-120) { throw AlongError.startInPast }
+        if let cap = edit.capacity {
+            guard (1...5).contains(cap) else { throw AlongError.notAllowed }
+            guard cap >= db.activities[i].participantIDs.count else { throw AlongError.capacityBelowAccepted }
+            db.activities[i].capacity = cap
+        }
+        db.activities[i].startDate = start
+        db.activities[i].endDate = end
+        if let note = edit.note { db.activities[i].note = note }
+        if let spot = edit.meetingDetails { db.activities[i].meetingDetails = spot }
+        return snapshot()
+    }
 
     func createActivity(_ draft: ActivityDraft) async throws -> AlongSnapshot {
         let now = clock()
@@ -178,13 +226,20 @@ actor MockAlongBackend: AlongBackend {
 
     // MARK: Messaging
 
-    func sendMessage(conversationID: ID, text: String) async throws -> AlongSnapshot {
+    func sendMessage(conversationID: ID, text: String) async throws -> Message {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return snapshot() }
+        guard !trimmed.isEmpty else { throw AlongError.notAllowed }
         guard let c = db.conversations.first(where: { $0.id == conversationID }), c.participantIDs.contains(me) else { throw AlongError.notFound }
         guard isChatOpen(c) else { throw AlongError.chatClosed }
-        db.messages.append(Message(id: UUID().uuidString, conversationID: conversationID, senderID: me, text: trimmed, sentAt: clock()))
-        return snapshot()
+        let message = Message(id: UUID().uuidString, conversationID: conversationID, senderID: me, text: trimmed, sentAt: clock())
+        db.messages.append(message)
+        return message
+    }
+
+    func loadMessages(conversationID: ID, before: Date?, limit: Int) async throws -> [Message] {
+        let all = db.messages.filter { $0.conversationID == conversationID && (before == nil || $0.sentAt < before!) }
+            .sorted { $0.sentAt < $1.sentAt }
+        return Array(all.suffix(limit))
     }
 
     /// A conversation is only usable while the guest's request is accepted and the plan is still live.
@@ -197,25 +252,40 @@ actor MockAlongBackend: AlongBackend {
 
     // MARK: Profile
 
-    func updateProfile(_ user: User) async -> AlongSnapshot {
-        if let i = db.users.firstIndex(where: { $0.id == me }) {
-            var u = user
-            u.id = me
-            u.firstName = String(user.firstName.trimmingCharacters(in: .whitespaces).prefix(24))
-            if u.firstName.isEmpty { u.firstName = db.users[i].firstName }
-            db.users[i] = u
-        }
-        return snapshot()
+    func loadMyProfile() async throws -> MyProfile {
+        MyProfile(user: db.users.first { $0.id == me }!, fullName: nil, hasDisplayName: true, ageConfirmed: true)
     }
 
-    func updateSettings(_ settings: UserSettings) async -> AlongSnapshot {
-        db.settings = settings
-        return snapshot()
+    func completeProfile(_ draft: ProfileDraft, fullName: String?) async throws {
+        if let i = db.users.firstIndex(where: { $0.id == me }) {
+            db.users[i].firstName = draft.displayName
+            db.users[i].bio = draft.bio
+            db.users[i].interests = draft.interests
+            db.users[i].alongFor = draft.alongFor
+        }
     }
+
+    func updateProfile(_ user: User) async throws -> User {
+        guard let i = db.users.firstIndex(where: { $0.id == me }) else { throw AlongError.notFound }
+        var u = user
+        u.id = me
+        u.firstName = String(user.firstName.trimmingCharacters(in: .whitespaces).prefix(24))
+        if u.firstName.isEmpty { u.firstName = db.users[i].firstName }
+        db.users[i] = u
+        return u
+    }
+
+    func updateSettings(_ settings: UserSettings) async throws { db.settings = settings }
+
+    // Avatars need Storage, which only exists with a real backend.
+    nonisolated var supportsAvatars: Bool { false }
+    func uploadAvatar(_ jpeg: Data) async throws -> String { throw AlongError.notConfigured }
+    func deleteAvatar(path: String) async throws {}
+    func avatarURL(path: String) async throws -> URL { throw AlongError.notConfigured }
 
     // MARK: Safety
 
-    func block(userID: ID) async -> AlongSnapshot {
+    func block(userID: ID) async throws -> AlongSnapshot {
         guard userID != me else { return snapshot() }
         db.blocked.insert(userID)
         // Sever every live relationship between the two people.
@@ -234,12 +304,12 @@ actor MockAlongBackend: AlongBackend {
         return snapshot()
     }
 
-    func unblock(userID: ID) async -> AlongSnapshot {
+    func unblock(userID: ID) async throws -> AlongSnapshot {
         db.blocked.remove(userID)
         return snapshot()
     }
 
-    func report(_ target: ReportTarget, reason: ReportReason) async {
+    func report(_ target: ReportTarget, reason: ReportReason) async throws {
         switch target {
         case .user(let id): db.reports.append("user:\(id):\(reason.rawValue)")
         case .activity(let id): db.reports.append("activity:\(id):\(reason.rawValue)")

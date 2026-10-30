@@ -10,6 +10,7 @@ struct LaunchOptions {
     var open: String?
     var create: String?
     var conversation: String?
+    var welcomeStep: String?
 
     static let current: LaunchOptions = {
         #if DEBUG
@@ -17,7 +18,8 @@ struct LaunchOptions {
         func value(_ key: String) -> String? { args.firstIndex(of: key).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil } }
         return LaunchOptions(skipOnboarding: args.contains("-along-skip-onboarding"), tab: value("-along-tab").flatMap(Int.init),
                              detent: value("-along-detent"), select: value("-along-select"), open: value("-along-open"),
-                             create: value("-along-create"), conversation: value("-along-conversation"))
+                             create: value("-along-create"), conversation: value("-along-conversation"),
+                             welcomeStep: value("-along-welcome-step"))
         #else
         return LaunchOptions()
         #endif

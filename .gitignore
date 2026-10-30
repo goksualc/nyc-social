@@ -3,3 +3,10 @@ xcuserdata/
 DerivedData/
 .DS_Store
 Along/Resources/Info.plist
+Along/Resources/Along.entitlements
+Config/Secrets.xcconfig
+*.xcconfig.local
+.env
+.env.*
+supabase/.temp/
+supabase/.branches/

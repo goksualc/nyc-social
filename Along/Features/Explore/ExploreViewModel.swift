@@ -23,6 +23,11 @@ final class ExploreViewModel {
     var createKind: ActivityKind?
     var locateIssue: String?
 
+    /// Visible map area; drives which plans are fetched. Starts on all of Manhattan.
+    private var visibleRegion = ExploreViewModel.overviewRegion
+    private var lastSubmitted: DiscoveryQuery?
+    private var debounce: Task<Void, Never>?
+
     init(store: AppStore, location: LocationService) {
         self.store = store
         self.location = location
@@ -34,6 +39,10 @@ final class ExploreViewModel {
     static let overview: MapCameraPosition = .camera(MapCamera(
         centerCoordinate: CLLocationCoordinate2D(latitude: 40.7530, longitude: -73.9850), distance: 25000))
 
+    nonisolated static let overviewRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 40.7650, longitude: -73.9800),
+        span: MKCoordinateSpan(latitudeDelta: 0.16, longitudeDelta: 0.09))
+
     static let bounds = MapCameraBounds(
         centerCoordinateBounds: MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 40.7900, longitude: -73.9700),
                                                    span: MKCoordinateSpan(latitudeDelta: 0.20, longitudeDelta: 0.07)),
@@ -41,17 +50,77 @@ final class ExploreViewModel {
 
     // MARK: Data
 
+    /// The server applies the same filter to the query; filtering again here makes pill taps feel instant
+    /// while the new page loads.
     var activities: [Activity] {
-        store.discoverable.filter { a in
-            switch filter {
-            case .all: true
-            case .walks: a.kind == .walk
-            case .cowork: a.kind == .cowork
-            case .today: ActivityTime.isToday(a.startDate, now: store.now)
-            case .tomorrow: ActivityTime.isTomorrow(a.startDate, now: store.now)
-            }
+        let window = Self.window(for: filter, now: store.now)
+        return store.discoverable.filter { a in
+            if filter == .walks && a.kind != .walk { return false }
+            if filter == .cowork && a.kind != .cowork { return false }
+            if let to = window.to, a.startDate >= to { return false }
+            if let from = window.from, a.endDate <= from { return false }
+            return true
         }
         .sorted { $0.startDate < $1.startDate }
+    }
+
+    var isLoading: Bool { store.discoveryState == .loading }
+    var loadError: String? { if case .failed(let m) = store.discoveryState, store.discoverable.isEmpty { m } else { nil } }
+
+    /// "Today" / "Tomorrow" are overlap windows, so a session already under way still counts as today.
+    nonisolated static func window(for filter: Filter, now: Date, calendar: Calendar = .current) -> (from: Date?, to: Date?) {
+        let startOfToday = calendar.startOfDay(for: now)
+        switch filter {
+        case .today:
+            return (now, calendar.date(byAdding: .day, value: 1, to: startOfToday))
+        case .tomorrow:
+            let start = calendar.date(byAdding: .day, value: 1, to: startOfToday)!
+            return (start, calendar.date(byAdding: .day, value: 2, to: startOfToday))
+        default:
+            return (nil, calendar.date(byAdding: .day, value: 21, to: now))   // "All" looks three weeks ahead
+        }
+    }
+
+    /// Visible rectangle (padded 15% so small pans don't refetch), capped to what the server accepts.
+    nonisolated static func query(region: MKCoordinateRegion, filter: Filter, now: Date) -> DiscoveryQuery {
+        let latHalf = min(region.span.latitudeDelta, 0.5) / 2 * 1.15
+        let lngHalf = min(region.span.longitudeDelta, 0.5) / 2 * 1.15
+        let w = window(for: filter, now: now)
+        return DiscoveryQuery(
+            minLat: region.center.latitude - latHalf, minLng: region.center.longitude - lngHalf,
+            maxLat: region.center.latitude + latHalf, maxLng: region.center.longitude + lngHalf,
+            kind: filter == .walks ? .walk : filter == .cowork ? .cowork : nil,
+            from: w.from, to: w.to, limit: 50, offset: 0)
+    }
+
+    // MARK: Fetching
+
+    /// Called when the map settles. Debounced so a flurry of pans costs one request.
+    func regionChanged(_ region: MKCoordinateRegion) {
+        visibleRegion = region
+        debounce?.cancel()
+        debounce = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            await self?.reload()
+        }
+    }
+
+    /// Fetches the first page for the current area + filter (skips identical back-to-back queries).
+    func reload(force: Bool = false) async {
+        var q = Self.query(region: visibleRegion, filter: filter, now: store.now)
+        q.from = q.from.map { Date(timeIntervalSince1970: ($0.timeIntervalSince1970 / 60).rounded(.down) * 60) }   // ignore sub-minute drift
+        if !force, let last = lastSubmitted, Self.sameArea(last, q), last.kind == q.kind,
+           last.from == q.from, last.to == q.to, store.discoveryState != .idle {
+            if case .failed = store.discoveryState {} else { return }
+        }
+        lastSubmitted = q
+        await store.discover(q)
+    }
+
+    private static func sameArea(_ a: DiscoveryQuery, _ b: DiscoveryQuery) -> Bool {
+        abs(a.minLat - b.minLat) < 0.0005 && abs(a.maxLat - b.maxLat) < 0.0005
+            && abs(a.minLng - b.minLng) < 0.0005 && abs(a.maxLng - b.maxLng) < 0.0005
     }
 
     var walks: [Activity] { activities.filter { $0.kind == .walk } }
@@ -77,6 +146,7 @@ final class ExploreViewModel {
 
     func setFilter(_ f: Filter) {
         alongWithAnimation { filter = f; if selected == nil { selectedID = nil } }
+        Task { await reload() }
     }
 
     func select(_ a: Activity) {

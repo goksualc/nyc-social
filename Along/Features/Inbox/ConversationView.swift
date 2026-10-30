@@ -32,8 +32,13 @@ final class ConversationViewModel {
         let text = draft
         draft = ""
         Haptics.soft()
-        await store.send(text, in: c)
+        // Optimistic bubble; if the server refuses, the store rolls it back and we put the text back in the box.
+        if await !store.send(text, in: c) && draft.isEmpty { draft = text }
     }
+
+    var canLoadEarlier: Bool { conversation.map(store.canLoadEarlier) ?? false }
+    func loadLatest() async { if let c = conversation { await store.loadHistory(for: c, older: false) } }
+    func loadEarlier() async { if let c = conversation { await store.loadHistory(for: c, older: true) } }
 }
 
 private struct ConversationContent: View {
@@ -96,6 +101,11 @@ private struct ConversationContent: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 4) {
+                    if vm.canLoadEarlier && !vm.messages.isEmpty {
+                        Button("Earlier messages") { Task { await vm.loadEarlier() } }
+                            .font(AlongFont.subheadEmphasis).foregroundStyle(AlongColor.navy)
+                            .frame(minHeight: AlongSize.minTouch)
+                    }
                     let items = vm.messages
                     ForEach(Array(items.enumerated()), id: \.element.id) { i, m in
                         let mine = m.senderID == vm.store.me.id
@@ -117,6 +127,7 @@ private struct ConversationContent: View {
                 .padding(.vertical, AlongSpacing.md)
             }
             .scrollDismissesKeyboard(.interactively)
+            .task { await vm.loadLatest() }
             .onAppear { scrollToEnd(proxy, animated: false) }
             .onChange(of: vm.messages.count) { scrollToEnd(proxy, animated: true) }
             .onChange(of: focused) { if focused { scrollToEnd(proxy, animated: true) } }

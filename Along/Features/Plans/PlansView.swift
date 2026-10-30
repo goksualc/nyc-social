@@ -44,6 +44,7 @@ struct PlansView: View {
                 .padding(.bottom, AlongSpacing.xl)
                 .alongAnimation(value: vm.items.map(\.id))
             }
+            .refreshable { await store.refresh() }
             .alongScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .alongDestinations()

@@ -9,6 +9,8 @@ struct Place: Hashable, Codable, Sendable {
     var coordinate: Coordinate
     /// Streets and intersections are public-safe labels; named venues are not.
     var isStreet: Bool = false
+    /// Street address of a café, only present once the viewer has been accepted.
+    var address: String?
 
     /// What anyone may see.
     var publicLabel: String { isStreet && !name.isEmpty ? name : area }

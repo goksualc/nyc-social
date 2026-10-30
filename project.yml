@@ -4,6 +4,13 @@ options:
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
+configFiles:
+  Debug: Config/Debug.xcconfig
+  Release: Config/Release.xcconfig
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift.git
+    exactVersion: 2.49.0   # 2.50+ requires Swift tools 6.1 (Xcode 16.3+); raise this once you upgrade Xcode
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -17,7 +24,13 @@ targets:
     platform: iOS
     sources:
       - path: Along
-        excludes: ["Resources/Info.plist"]
+        excludes: ["Resources/Info.plist", "Resources/Along.entitlements"]
+    dependencies:
+      - package: Supabase
+    entitlements:
+      path: Along/Resources/Along.entitlements
+      properties:
+        com.apple.developer.applesignin: [Default]
     info:
       path: Along/Resources/Info.plist
       properties:
@@ -28,6 +41,8 @@ targets:
         UIRequiredDeviceCapabilities: [arm64]
         NSLocationWhenInUseUsageDescription: Along uses your approximate location to centre the map on you. It is never shared with other people.
         ITSAppUsesNonExemptEncryption: false
+        SUPABASE_URL: $(SUPABASE_URL)
+        SUPABASE_PUBLISHABLE_KEY: $(SUPABASE_PUBLISHABLE_KEY)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.along.app

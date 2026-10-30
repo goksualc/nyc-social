@@ -52,6 +52,14 @@ private struct ActivityDetailContent: View {
                 }
             }
         }
+        .sheet(isPresented: $vm.showEdit) {
+            if let a = vm.activity {
+                EditActivitySheet(activity: a)
+                    .presentationDetents([.large])
+                    .presentationCornerRadius(AlongRadius.sheet)
+                    .presentationBackground(AlongColor.offWhite)
+            }
+        }
         .sheet(item: $vm.profile) { item in
             UserProfileSheet(userID: item.id)
                 .presentationDetents([.large])
@@ -216,6 +224,9 @@ private struct ActivityDetailContent: View {
         VStack(alignment: .leading, spacing: AlongSpacing.xs) {
             Label("Meeting details", systemImage: "mappin.circle")
                 .font(AlongFont.subheadEmphasis).foregroundStyle(AlongColor.navy)
+            if let c = a.cowork, let address = c.venue.address, !address.isEmpty {
+                Text("\(c.venue.name), \(address)").font(AlongFont.bodyEmphasis).foregroundStyle(AlongColor.textPrimary)
+            }
             Text(a.meetingDetails).font(AlongFont.body).foregroundStyle(AlongColor.textPrimary)
             Text(vm.isHost ? "Only you and accepted guests can see this." : "Shared with you because you're in. Please keep it between us.")
                 .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
@@ -341,8 +352,10 @@ private struct ActivityDetailContent: View {
     private func actionBar(_ a: Activity) -> some View {
         let bar = VStack(spacing: AlongSpacing.xxs) {
             if vm.isHost {
-                if vm.isLive { AlongButton(title: "Cancel plan", style: .destructive) { vm.confirmCancel = true } }
-                else { endedLabel(a) }
+                if vm.isLive {
+                    AlongButton(title: "Edit plan", style: .secondary) { vm.showEdit = true }
+                    AlongButton(title: "Cancel plan", style: .ghost) { vm.confirmCancel = true }
+                } else { endedLabel(a) }
             } else if !vm.isLive {
                 endedLabel(a)
             } else {

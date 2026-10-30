@@ -183,6 +183,7 @@ struct BlockedUsersView: View {
 
 struct AboutView: View {
     @Environment(AppStore.self) private var store
+    @Environment(AppSession.self) private var session
     @State private var confirmReset = false
 
     var body: some View {
@@ -191,17 +192,27 @@ struct AboutView: View {
                 AlongLogo(variant: .navy, width: 150)
                 Text("Good company, wherever you're headed.")
                     .font(.system(.title3, design: .serif)).foregroundStyle(AlongColor.textPrimary).multilineTextAlignment(.center)
-                Text("Version 0.1 · Phase 1 prototype · Manhattan").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                Text("Version 0.2 · Manhattan").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                Label(session.isLive ? "Connected to Along" : "Demo mode · local data only",
+                      systemImage: session.isLive ? "checkmark.icloud" : "internaldrive")
+                    .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                if let problem = session.configProblem {
+                    Text(problem.explanation).font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary).multilineTextAlignment(.center)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, AlongSpacing.md)
 
-            safetyGroup("Simulated in this prototype", "iphone", SafetyPolicy.simulatedInPrototype,
-                        footer: "These behave correctly on this device, but a modified app could bypass any of them.")
-            safetyGroup("Required on the server before launch", "lock.shield", SafetyPolicy.requiredBeforeProduction,
-                        footer: "Enforced by the backend, never by the app alone.")
+            if store.isDemo {
+                safetyGroup("Simulated in demo mode", "iphone", SafetyPolicy.simulatedInPrototype,
+                            footer: "These behave correctly on this device, but a modified app could bypass any of them.")
+            }
+            safetyGroup(store.isDemo ? "Required on the server before launch" : "Enforced by the server", "lock.shield",
+                        SafetyPolicy.requiredBeforeProduction,
+                        footer: store.isDemo ? "Enforced by the backend, never by the app alone."
+                                             : "Row Level Security and database functions enforce these. See supabase/README.md for what is still manual.")
 
-            VStack(alignment: .leading, spacing: AlongSpacing.xs) {
+            if store.isDemo { VStack(alignment: .leading, spacing: AlongSpacing.xs) {
                 AlongSectionLabel("Demo controls")
                 VStack(spacing: 0) {
                     ToggleRow(title: "Hosts respond automatically", detail: "So you can try both sides of a request on your own.",
@@ -214,7 +225,7 @@ struct AboutView: View {
                     }
                 }
                 .alongCard()
-            }
+            } }
         }
         .confirmationDialog("Reset demo data?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Reset", role: .destructive) { Task { await store.resetDemo() } }

@@ -24,6 +24,7 @@ struct InboxView: View {
                 .padding(.horizontal, AlongSpacing.gutter)
                 .padding(.bottom, AlongSpacing.xl)
             }
+            .refreshable { await store.refresh() }
             .alongScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .alongDestinations()

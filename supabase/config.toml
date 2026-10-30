@@ -1,0 +1,34 @@
+# Supabase CLI configuration (local development: `supabase start`; hosted: `supabase link` + `supabase db push`).
+project_id = "along"
+
+[api]
+enabled = true
+schemas = ["public"]                      # `private` must never be exposed
+extra_search_path = ["public", "extensions"]
+max_rows = 200
+
+[db]
+major_version = 15
+
+[realtime]
+enabled = true
+
+[storage]
+enabled = true
+file_size_limit = "2MiB"
+
+[auth]
+enabled = true
+site_url = "along://auth"
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+# Native Sign in with Apple: the app sends Apple's identity token, so only the bundle id is needed here.
+# (A client secret is only required for the web OAuth flow.)
+[auth.external.apple]
+enabled = true
+client_id = "com.along.app"
+secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
+skip_nonce_check = false

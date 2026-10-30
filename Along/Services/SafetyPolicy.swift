@@ -1,10 +1,10 @@
 import Foundation
 
-/// A single place that documents how safety is handled in Phase 1.
+/// A single place that documents how safety is handled.
 ///
-/// Phase 1 *simulates* these protections locally so the experience can be designed and tested.
-/// A simulation is a UI affordance, not a guarantee: before Along ships, every item under
-/// `requiredBeforeProduction` has to be enforced by the backend.
+/// Demo mode *simulates* these protections locally so the experience can be explored without a backend. With
+/// Supabase connected they are enforced by Row Level Security and database functions (see `supabase/migrations`).
+/// `requiredBeforeProduction` lists the items that still need operational work beyond the schema.
 enum SafetyPolicy {
     struct Item: Identifiable, Sendable {
         let id = UUID()
@@ -23,12 +23,12 @@ enum SafetyPolicy {
     ]
 
     static let requiredBeforeProduction: [Item] = [
-        .init(title: "Server-side authorisation", detail: "Row Level Security so users can only read or change what they own or have been granted."),
-        .init(title: "Server-side redaction", detail: "Exact locations and meeting notes must never be sent to unaccepted users in the first place."),
-        .init(title: "Verified age and identity", detail: "Age assurance and account verification that can't be bypassed on the device."),
-        .init(title: "Moderation pipeline", detail: "Report triage, human review, repeat-offender handling and appeals."),
-        .init(title: "Enforced blocking", detail: "Blocks applied in every query, push notification and real-time channel."),
+        .init(title: "Row Level Security", detail: "Users can only read or change what they own or have been granted. Writes go through validated functions."),
+        .init(title: "Server-side redaction", detail: "Exact locations and meeting notes are only returned to the host and accepted guests."),
+        .init(title: "Blocking everywhere", detail: "Blocks hide profiles, plans, requests and chats in both directions, including Realtime."),
+        .init(title: "Verified age and identity", detail: "Today 18+ is a self-declaration stored with a server timestamp. Add age assurance before wide launch."),
+        .init(title: "Moderation pipeline", detail: "Reports are stored. Triage, human review, repeat-offender handling and appeals still need to be built."),
         .init(title: "Abuse and rate limiting", detail: "Limits on requests, messages and plan creation; spam and fake-account detection."),
-        .init(title: "Data protection", detail: "Encrypted storage, minimal retention, no location history, and account deletion."),
+        .init(title: "Data protection", detail: "Encrypted storage, minimal retention and no location history. Apple token revocation on account deletion needs an Edge Function."),
     ]
 }

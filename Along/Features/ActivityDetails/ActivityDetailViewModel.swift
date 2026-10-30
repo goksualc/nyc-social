@@ -13,6 +13,7 @@ final class ActivityDetailViewModel {
     var confirmLeave = false
     var confirmBlock = false
     var showReport = false
+    var showEdit = false
     var isWorking = false
 
     init(store: AppStore, activityID: ID) {
@@ -40,7 +41,15 @@ final class ActivityDetailViewModel {
     // MARK: Route
 
     func loadRoute() async {
-        guard let walk = activity?.walk else { return }
+        guard let activity, let walk = activity.walk else { return }
+        // The host's saved route (shared with accepted guests) beats re-asking MapKit.
+        if activity.routeCoordinates.count >= 2 {
+            let coords = activity.routeCoordinates
+            let length = zip(coords, coords.dropFirst()).reduce(0) { $0 + $1.0.distance(to: $1.1) }
+            route = RoutePreview(coordinates: coords, distance: length, travelTime: length / 1.35, isEstimate: false)
+            routeCamera = .rect(Self.rect(for: coords))
+            return
+        }
         let preview = await RouteService.walkingRoute(from: walk.from.coordinate, to: walk.to.coordinate)
         route = preview
         routeCamera = .rect(Self.rect(for: preview.coordinates))

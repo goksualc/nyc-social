@@ -61,6 +61,13 @@ final class CreateActivityViewModel {
         routeCamera = .rect(ActivityDetailViewModel.rect(for: preview.coordinates))
     }
 
+    /// Keeps the first and last vertex and an even spread between (the server accepts up to 1,000).
+    static func downsample(_ coords: [Coordinate], to limit: Int) -> [Coordinate] {
+        guard coords.count > limit, limit >= 2 else { return coords }
+        let step = Double(coords.count - 1) / Double(limit - 1)
+        return (0..<limit).map { coords[min(Int((Double($0) * step).rounded()), coords.count - 1)] }
+    }
+
     // MARK: Publish
 
     private func daypart(_ d: Date) -> String {
@@ -75,7 +82,8 @@ final class CreateActivityViewModel {
             startDate: start, endDate: start.addingTimeInterval(max(RouteService.estimate(from.coordinate, to.coordinate).travelTime, 30 * 60)),
             visibility: visibility, capacity: spots,
             note: note.trimmingCharacters(in: .whitespacesAndNewlines),
-            meetingDetails: meetingDetails.trimmingCharacters(in: .whitespacesAndNewlines))
+            meetingDetails: meetingDetails.trimmingCharacters(in: .whitespacesAndNewlines),
+            routeCoordinates: route.map { $0.isEstimate ? [] : Self.downsample($0.coordinates, to: 400) } ?? [])
         return await publish(draft)
     }
 

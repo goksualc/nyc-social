@@ -1,0 +1,6 @@
+// Shared build settings. Public client configuration for Supabase is injected into Info.plist from here.
+// Real values live in Config/Secrets.xcconfig, which is git-ignored (see Secrets.xcconfig.example).
+SUPABASE_URL =
+SUPABASE_PUBLISHABLE_KEY =
+
+#include? "Secrets.xcconfig"

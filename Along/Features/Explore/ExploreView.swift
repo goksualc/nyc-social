@@ -66,6 +66,8 @@ struct ExploreView: View {
         }
         .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
         .mapControlVisibility(.hidden)
+        .onMapCameraChange(frequency: .onEnd) { context in vm.regionChanged(context.region) }
+        .task { await vm.reload() }
         .onTapGesture { vm.deselect() }
         .ignoresSafeArea(edges: .top)
     }
@@ -168,17 +170,32 @@ struct ExploreView: View {
                     .font(AlongFont.heading)
                     .foregroundStyle(AlongColor.textPrimary)
                 Spacer()
-                Text(vm.activities.isEmpty ? "" : "\(vm.activities.count) \(vm.activities.count == 1 ? "plan" : "plans")")
-                    .font(AlongFont.subhead)
-                    .foregroundStyle(AlongColor.textTertiary)
+                if vm.isLoading && vm.activities.isEmpty {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(vm.activities.isEmpty ? "" : "\(vm.activities.count) \(vm.activities.count == 1 ? "plan" : "plans")")
+                        .font(AlongFont.subhead)
+                        .foregroundStyle(AlongColor.textTertiary)
+                }
             }
         } content: {
-            if vm.activities.isEmpty {
+            if let error = vm.loadError {
+                ScrollView {
+                    AlongEmptyState(title: "Couldn't load plans.", message: error, actionTitle: "Try again") {
+                        Task { await store.retryDiscovery() }
+                    }
+                    .padding(.top, AlongSpacing.lg)
+                }
+                .refreshable { await vm.reload(force: true) }
+            } else if vm.activities.isEmpty && vm.isLoading {
+                ProgressView().frame(maxWidth: .infinity).padding(.top, AlongSpacing.xl)
+            } else if vm.activities.isEmpty {
                 let e = vm.emptyState
                 ScrollView {
                     AlongEmptyState(title: e.title, message: e.message, actionTitle: e.action) { vm.startCreating(e.kind) }
                         .padding(.top, AlongSpacing.lg)
                 }
+                .refreshable { await vm.reload(force: true) }
             } else {
                 ScrollView {
                     LazyVStack(spacing: AlongSpacing.sm) {
@@ -187,12 +204,16 @@ struct ExploreView: View {
                                 AlongActivityCard(activity: activity, host: vm.host(of: activity), now: store.now)
                             }
                             .buttonStyle(AlongPressStyle(scale: 0.985))
+                            .onAppear {
+                                if activity.id == vm.activities.last?.id { Task { await store.loadMoreDiscovery() } }
+                            }
                         }
                     }
                     .padding(.horizontal, AlongSpacing.gutter)
                     .padding(.top, AlongSpacing.xs)
                     .padding(.bottom, AlongSpacing.xl)
                 }
+                .refreshable { await vm.reload(force: true) }
             }
         }
     }

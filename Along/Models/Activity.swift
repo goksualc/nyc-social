@@ -11,11 +11,23 @@ enum ActivityKind: String, Codable, Sendable, CaseIterable {
 enum Pace: String, CaseIterable, Codable, Sendable, Identifiable {
     case casual = "Casual", moderate = "Moderate", fast = "Fast"
     var id: String { rawValue }
+    var dbValue: String { rawValue.lowercased() }
 }
 
 enum WorkStyle: String, CaseIterable, Codable, Sendable, Identifiable {
     case deepWork = "Deep Work", social = "Social", buildTogether = "Build Together"
     var id: String { rawValue }
+    var dbValue: String {
+        switch self { case .deepWork: "deep_work"; case .social: "social"; case .buildTogether: "build_together" }
+    }
+    init?(dbValue: String) {
+        switch dbValue {
+        case "deep_work": self = .deepWork
+        case "social": self = .social
+        case "build_together": self = .buildTogether
+        default: return nil
+        }
+    }
     /// Wording used on cards, e.g. "Focused work".
     var cardLabel: String {
         switch self {
@@ -29,6 +41,7 @@ enum WorkStyle: String, CaseIterable, Codable, Sendable, Identifiable {
 enum Visibility: String, CaseIterable, Codable, Sendable, Identifiable {
     case `public` = "Public", `private` = "Private"
     var id: String { rawValue }
+    var dbValue: String { rawValue.lowercased() }
 }
 
 struct WalkInfo: Hashable, Codable, Sendable {
@@ -57,9 +70,13 @@ struct Activity: Identifiable, Hashable, Codable, Sendable {
     var visibility: Visibility
     var capacity: Int
     var participantIDs: [ID] = []
+    /// Authoritative accepted-guest count when the server only sends a number (non-hosts never see guest IDs).
+    var participantCount: Int?
     var note: String = ""
     /// Exact meeting instructions. The server only returns this to the host and accepted guests.
     var meetingDetails: String = ""
+    /// The host's saved walking route (only sent to the host and accepted guests).
+    var routeCoordinates: [Coordinate] = []
     /// True when the viewer is allowed to see exact places and `meetingDetails`.
     var hasPreciseAccess: Bool = false
     var isCancelled = false
@@ -71,7 +88,7 @@ struct Activity: Identifiable, Hashable, Codable, Sendable {
     var walk: WalkInfo? { if case .walk(let w) = details { w } else { nil } }
     var cowork: CoworkInfo? { if case .cowork(let c) = details { c } else { nil } }
 
-    var spotsLeft: Int { max(capacity - participantIDs.count, 0) }
+    var spotsLeft: Int { max(capacity - (participantCount ?? participantIDs.count), 0) }
     var isFull: Bool { spotsLeft == 0 }
 
     func isExpired(at now: Date) -> Bool { endDate <= now }
