@@ -7,6 +7,8 @@ enum AlongError: LocalizedError, Sendable, Equatable {
     case notAuthenticated, sessionExpired, profileIncomplete, ageRequired
     case offline, imageTooLarge, uploadFailed, notConfigured
     case rateLimited, cancelled, generic
+    // Authentication
+    case invalidCredentials, emailNotConfirmed, weakPassword, samePassword, invalidLink, tooManyAttempts, providerUnavailable, signInFailed
 
     /// Maps the short codes raised by the database functions (`raise exception 'activity_full'`).
     init?(serverCode: String) {
@@ -57,6 +59,14 @@ enum AlongError: LocalizedError, Sendable, Equatable {
         case .uploadFailed: "Couldn't upload your photo. Try again."
         case .notConfigured: "Along isn't connected to a backend yet."
         case .rateLimited: "Too many reports today. Try again tomorrow."
+        case .invalidCredentials: "That email and password don't match. Try again."
+        case .emailNotConfirmed: "Confirm your email first. We can send the link again."
+        case .weakPassword: "Choose a stronger password. Use at least 8 characters and avoid common passwords."
+        case .samePassword: "Choose a password you haven't used before."
+        case .invalidLink: "That link has expired or was already used. Request a new one."
+        case .tooManyAttempts: "Too many attempts. Wait a minute and try again."
+        case .providerUnavailable: "This sign-in option isn't available right now. Try another way."
+        case .signInFailed: "Couldn't sign you in. Try again."
         case .cancelled: nil
         case .generic: "Something went wrong. Try again."
         }

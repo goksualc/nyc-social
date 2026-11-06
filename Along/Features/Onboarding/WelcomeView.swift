@@ -1,15 +1,20 @@
 import SwiftUI
 import AuthenticationServices
-import CryptoKit
 
 struct WelcomeView: View {
     @Environment(AppSession.self) private var session
     @AppStorage("along.ageConfirmedLocally") private var ageConfirmedLocally = false
     @State private var path: [Step] = {
-        switch LaunchOptions.current.welcomeStep { case "eligibility": [.eligibility]; case "signin": [.signIn]; default: [] }
+        switch LaunchOptions.current.welcomeStep {
+        case "eligibility": [.eligibility]
+        case "signin": [.signIn]
+        case "email": [.signIn, .email]
+        case "forgot": [.signIn, .email, .forgot]
+        default: []
+        }
     }()
 
-    enum Step: Hashable { case eligibility, signIn }
+    enum Step: Hashable { case eligibility, signIn, email, forgot }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -54,8 +59,9 @@ struct WelcomeView: View {
                         ageConfirmedLocally = true
                         if session.isLive { path.append(.signIn) } else { Task { await session.signInDemo() } }
                     }
-                case .signIn:
-                    SignInView()
+                case .signIn: SignInView()
+                case .email: EmailAuthView()
+                case .forgot: ForgotPasswordView()
                 }
             }
         }
@@ -119,64 +125,6 @@ struct EligibilityView: View {
                 .frame(width: 28)
             Text(text).font(AlongFont.body).foregroundStyle(AlongColor.textPrimary)
         }
-    }
-}
-
-/// Native Sign in with Apple. A fresh random nonce is sent hashed to Apple and raw to Supabase for verification.
-struct SignInView: View {
-    @Environment(AppSession.self) private var session
-    @State private var rawNonce = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: AlongSpacing.lg) {
-            Text("Sign in")
-                .font(AlongFont.screenTitle)
-                .foregroundStyle(AlongColor.textPrimary)
-                .padding(.top, AlongSpacing.lg)
-            Text("We use Sign in with Apple, so there's no new password to remember. You choose what other people see.")
-                .font(AlongFont.body)
-                .foregroundStyle(AlongColor.textTertiary)
-
-            Spacer()
-
-            VStack(spacing: AlongSpacing.sm) {
-                if let error = session.errorMessage {
-                    Text(error).font(AlongFont.subhead).foregroundStyle(AlongColor.destructive)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                SignInWithAppleButton(.continue) { request in
-                    rawNonce = Self.randomNonce()
-                    request.requestedScopes = [.fullName, .email]
-                    request.nonce = Self.sha256(rawNonce)
-                    session.clearError()
-                } onCompletion: { result in
-                    Task { await session.signInWithApple(result, rawNonce: rawNonce) }
-                }
-                .signInWithAppleButtonStyle(.black)
-                .frame(height: AlongSize.button)
-                .clipShape(RoundedRectangle(cornerRadius: AlongRadius.control, style: .continuous))
-                .disabled(session.isBusy || !session.network.isOnline)
-                .overlay { if session.isBusy { ProgressView().tint(.white) } }
-
-                if !session.network.isOnline {
-                    Text("You're offline. Connect to sign in.").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
-                }
-            }
-            .padding(.bottom, AlongSpacing.md)
-        }
-        .padding(.horizontal, AlongSpacing.gutter + 4)
-        .alongScreenBackground()
-    }
-
-    static func randomNonce(length: Int = 32) -> String {
-        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
-        var bytes = [UInt8](repeating: 0, count: length)
-        precondition(SecRandomCopyBytes(kSecRandomDefault, length, &bytes) == errSecSuccess)
-        return String(bytes.map { charset[Int($0) % charset.count] })
-    }
-
-    static func sha256(_ input: String) -> String {
-        SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 

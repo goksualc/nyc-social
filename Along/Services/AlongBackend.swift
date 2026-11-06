@@ -4,10 +4,31 @@ import Foundation
 // implements the data services in memory for demo mode, previews and tests.
 // Mutations that change "my world" return a fresh `AlongSnapshot`; discovery is queried separately.
 
+enum SignUpOutcome: Equatable {
+    case signedIn(AuthSession)
+    /// Email confirmation is on: there is no session until the link is opened.
+    case verificationRequired(email: String)
+}
+
+struct AuthLinkResult: Equatable {
+    var kind: AuthRedirect.Kind
+    var session: AuthSession
+}
+
 protocol AuthService: Sendable {
     /// Restores a persisted session (Keychain). `nil` when signed out.
     func restoreSession() async throws -> AuthSession?
     func signInWithApple(idToken: String, nonce: String) async throws -> AuthSession
+    /// Google through Supabase OAuth (PKCE) in a system `ASWebAuthenticationSession`. Cancellation throws `.cancelled`.
+    func signInWithGoogle() async throws -> AuthSession
+    func signIn(email: String, password: String) async throws -> AuthSession
+    func signUp(email: String, password: String, fullName: String) async throws -> SignUpOutcome
+    func resendVerification(email: String) async throws
+    func sendPasswordReset(email: String) async throws
+    /// Sets a new password for the signed-in (recovery) session.
+    func updatePassword(_ newPassword: String) async throws
+    /// Completes a verification, recovery or OAuth link opened in the app.
+    func handleAuthLink(_ url: URL) async throws -> AuthLinkResult
     /// Demo mode only. Real backends throw `AlongError.notAllowed`.
     func signInDemo() async throws -> AuthSession
     func signOut() async throws

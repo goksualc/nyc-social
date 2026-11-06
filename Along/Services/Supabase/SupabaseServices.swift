@@ -10,16 +10,75 @@ final class SupabaseAuthService: AuthService, @unchecked Sendable {
 
     private func map(_ s: Session) -> AuthSession { AuthSession(userID: s.user.id.uuidString.lowercased()) }
 
-    /// Reads the Keychain-persisted session without a network round trip, so the app opens offline too.
-    /// The SDK refreshes an expired access token transparently on the next request.
+    /// Restores the Keychain session. An expired access token is refreshed; if the refresh is rejected the session is
+    /// dropped. With no connection the stored session is used as-is so the app still opens.
     func restoreSession() async throws -> AuthSession? {
-        client.auth.currentSession.map(map)
+        guard let stored = client.auth.currentSession else { return nil }
+        do {
+            return map(try await client.auth.session)
+        } catch {
+            switch ErrorPresenter.map(error) {
+            case .offline: return map(stored)
+            case .sessionExpired:
+                try? await client.auth.signOut(scope: .local)
+                return nil
+            default: return map(stored)
+            }
+        }
     }
 
     func signInWithApple(idToken: String, nonce: String) async throws -> AuthSession {
         let session = try await client.auth.signInWithIdToken(
             credentials: OpenIDConnectCredentials(provider: .apple, idToken: idToken, nonce: nonce))
         return map(session)
+    }
+
+    func signInWithGoogle() async throws -> AuthSession {
+        let session = try await client.auth.signInWithOAuth(
+            provider: .google, redirectTo: AuthRedirect.url(.oauth),
+            queryParams: [(name: "prompt", value: "select_account")])
+        return map(session)
+    }
+
+    func signIn(email: String, password: String) async throws -> AuthSession {
+        map(try await client.auth.signIn(email: email, password: password))
+    }
+
+    func signUp(email: String, password: String, fullName: String) async throws -> SignUpOutcome {
+        do {
+            let response = try await client.auth.signUp(
+                email: email, password: password, data: ["full_name": .string(fullName)],
+                redirectTo: AuthRedirect.url(.verify))
+            switch response {
+            case .session(let session): return .signedIn(map(session))
+            case .user: return .verificationRequired(email: email)
+            }
+        } catch let error as AuthError {
+            // Never reveal that an address is already registered: look identical to a fresh sign-up.
+            if case .api(_, let code, _, _) = error, code == .userAlreadyExists || code == .emailExists {
+                return .verificationRequired(email: email)
+            }
+            throw error
+        }
+    }
+
+    func resendVerification(email: String) async throws {
+        try await client.auth.resend(email: email, type: .signup, emailRedirectTo: AuthRedirect.url(.verify))
+    }
+
+    func sendPasswordReset(email: String) async throws {
+        try await client.auth.resetPasswordForEmail(email, redirectTo: AuthRedirect.url(.recovery))
+    }
+
+    func updatePassword(_ newPassword: String) async throws {
+        _ = try await client.auth.update(user: UserAttributes(password: newPassword))
+    }
+
+    func handleAuthLink(_ url: URL) async throws -> AuthLinkResult {
+        guard let kind = AuthRedirect.kind(of: url) else { throw AlongError.invalidLink }
+        // PKCE: the one-time code is only redeemable with the verifier stored on this device.
+        let session = try await client.auth.session(from: url)
+        return AuthLinkResult(kind: kind, session: map(session))
     }
 
     func signInDemo() async throws -> AuthSession { throw AlongError.notAllowed }

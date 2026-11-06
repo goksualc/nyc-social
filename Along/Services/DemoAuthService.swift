@@ -13,6 +13,13 @@ final class DemoAuthService: AuthService, @unchecked Sendable {
         defaults.bool(forKey: key) || LaunchOptions.current.skipOnboarding ? session : nil
     }
     func signInWithApple(idToken: String, nonce: String) async throws -> AuthSession { throw AlongError.notConfigured }
+    func signInWithGoogle() async throws -> AuthSession { throw AlongError.notConfigured }
+    func signIn(email: String, password: String) async throws -> AuthSession { throw AlongError.notConfigured }
+    func signUp(email: String, password: String, fullName: String) async throws -> SignUpOutcome { throw AlongError.notConfigured }
+    func resendVerification(email: String) async throws { throw AlongError.notConfigured }
+    func sendPasswordReset(email: String) async throws { throw AlongError.notConfigured }
+    func updatePassword(_ newPassword: String) async throws { throw AlongError.notConfigured }
+    func handleAuthLink(_ url: URL) async throws -> AuthLinkResult { throw AlongError.notConfigured }
     func signInDemo() async throws -> AuthSession {
         defaults.set(true, forKey: key)
         emit(session)

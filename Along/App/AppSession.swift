@@ -9,7 +9,8 @@ import AuthenticationServices
 /// prototype still runs. Either way the rest of the app only sees `AppStore`.
 @MainActor @Observable
 final class AppSession {
-    enum Phase: Equatable { case launching, signedOut, needsProfile, ready, failed(String) }
+    /// `launching` = loading, `signedOut` = unauthenticated, `ready` = authenticated, `failed` = error.
+    enum Phase: Equatable { case launching, signedOut, emailVerification(String), passwordRecovery, needsProfile, ready, failed(String) }
 
     struct Services {
         var auth: any AuthService
@@ -33,7 +34,7 @@ final class AppSession {
 
     private let services: Services
     private var activeUserID: ID?
-    private var fullNameFromApple: String?
+    private var knownFullName: String?
     private var observer: Task<Void, Never>?
 
     init(services: Services, isLive: Bool, configProblem: SupabaseConfig.Problem?) {
@@ -97,7 +98,7 @@ final class AppSession {
             }
             if let name = credential.fullName {
                 let formatted = PersonNameComponentsFormatter().string(from: name).trimmingCharacters(in: .whitespaces)
-                if !formatted.isEmpty { fullNameFromApple = formatted; suggestedName = name.givenName ?? formatted }
+                if !formatted.isEmpty { knownFullName = formatted; suggestedName = name.givenName ?? formatted }
             }
             await run {
                 let session = try await self.services.auth.signInWithApple(idToken: idToken, nonce: rawNonce)
@@ -107,6 +108,100 @@ final class AppSession {
     }
 
     /// Loads the profile and either asks for the basics or opens the app.
+    /// Google, through Supabase OAuth. Cancelling the system sheet is not an error.
+    func signInWithGoogle() async {
+        await run {
+            do {
+                let session = try await self.services.auth.signInWithGoogle()
+                await self.enter(session)
+            } catch where ErrorPresenter.map(error) == .cancelled {
+                return
+            }
+        }
+    }
+
+    func signInWithEmail(email: String, password: String) async {
+        let email = AuthValidation.normalized(email)
+        await run {
+            do {
+                let session = try await self.services.auth.signIn(email: email, password: password)
+                await self.enter(session)
+            } catch where ErrorPresenter.map(error) == .emailNotConfirmed {
+                self.phase = .emailVerification(email)
+            }
+        }
+    }
+
+    func signUpWithEmail(fullName: String, email: String, password: String) async {
+        let email = AuthValidation.normalized(email)
+        let name = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        await run {
+            let outcome = try await self.services.auth.signUp(email: email, password: password, fullName: name)
+            self.knownFullName = name
+            self.suggestedName = name.components(separatedBy: " ").first ?? name
+            switch outcome {
+            case .signedIn(let session): await self.enter(session)
+            case .verificationRequired(let email): self.phase = .emailVerification(email)
+            }
+        }
+    }
+
+    /// Sends the confirmation link again. Returns whether it was sent.
+    func resendVerification(email: String) async -> Bool {
+        var sent = false
+        await run { try await self.services.auth.resendVerification(email: email); sent = true }
+        return sent
+    }
+
+    /// Always reports success unless the problem is local (offline, rate limit), so it never reveals whether an account exists.
+    func requestPasswordReset(email: String) async -> Bool {
+        var sent = false
+        await run {
+            do { try await self.services.auth.sendPasswordReset(email: AuthValidation.normalized(email)) }
+            catch {
+                let mapped = ErrorPresenter.map(error)
+                if mapped == .offline || mapped == .tooManyAttempts { throw error }
+            }
+            sent = true
+        }
+        return sent
+    }
+
+    func updatePassword(_ newPassword: String) async {
+        await run {
+            try await self.services.auth.updatePassword(newPassword)
+            guard let session = try await self.services.auth.restoreSession() else { throw AlongError.sessionExpired }
+            self.activeUserID = nil
+            await self.enter(session)
+        }
+    }
+
+    /// Back to the welcome screen from the verification / recovery screens.
+    func cancelPendingAuth() async {
+        if phase == .passwordRecovery { await signOut() } else { reset(notice: nil) }
+    }
+
+    /// Completes a link opened from an email or the OAuth redirect.
+    func handle(url: URL) async {
+        guard isLive, AuthRedirect.kind(of: url) != nil else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let result = try await services.auth.handleAuthLink(url)
+            errorMessage = nil
+            switch result.kind {
+            case .recovery:
+                activeUserID = result.session.userID
+                phase = .passwordRecovery
+            case .verify, .oauth:
+                await enter(result.session)
+            }
+        } catch {
+            let message = ErrorPresenter.message(for: error, fallback: AlongError.invalidLink.errorDescription ?? "")
+            if phase == .signedOut { notice = message } else { errorMessage = message }
+        }
+    }
+
     private func enter(_ session: AuthSession) async {
         guard activeUserID != session.userID || phase != .ready else { return }
         do {
@@ -126,7 +221,7 @@ final class AppSession {
 
     func completeProfile(_ draft: ProfileDraft) async {
         await run {
-            try await self.services.backend.completeProfile(draft, fullName: self.fullNameFromApple)
+            try await self.services.backend.completeProfile(draft, fullName: self.knownFullName)
             await self.openStore()
         }
     }
@@ -172,14 +267,14 @@ final class AppSession {
     }
 
     private func handleSignedOutElsewhere() {
-        guard phase == .ready || phase == .needsProfile else { return }
+        guard phase == .ready || phase == .needsProfile || phase == .passwordRecovery else { return }
         reset(notice: AlongError.sessionExpired.errorDescription)
     }
 
     private func reset(notice: String?) {
         store = nil
         activeUserID = nil
-        fullNameFromApple = nil
+        knownFullName = nil
         suggestedName = ""
         self.notice = notice
         phase = .signedOut

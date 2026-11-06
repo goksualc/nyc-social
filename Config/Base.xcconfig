@@ -2,5 +2,8 @@
 // Real values live in Config/Secrets.xcconfig, which is git-ignored (see Secrets.xcconfig.example).
 SUPABASE_URL =
 SUPABASE_PUBLISHABLE_KEY =
+// Optional: real Terms / Privacy pages (use https:/$()/example.com/terms). Empty = shown as plain text, never linked.
+LEGAL_TERMS_URL =
+LEGAL_PRIVACY_URL =
 
 #include? "Secrets.xcconfig"

@@ -30,12 +30,14 @@ struct RootView: View {
         }
     }
 
-    private enum Screen: Equatable { case splash, welcome, profile, main, failed }
+    private enum Screen: Equatable { case splash, welcome, checkInbox, recovery, profile, main, failed }
     private var screen: Screen {
         guard splashDone else { return .splash }
         switch session.phase {
         case .launching: return .splash
         case .signedOut: return .welcome
+        case .emailVerification: return .checkInbox
+        case .passwordRecovery: return .recovery
         case .needsProfile: return .profile
         case .ready: return session.store == nil ? .splash : .main
         case .failed: return .failed
@@ -46,6 +48,9 @@ struct RootView: View {
         switch screen {
         case .splash: SplashView().transition(.opacity)
         case .welcome: WelcomeView().transition(.opacity)
+        case .checkInbox:
+            if case .emailVerification(let email) = session.phase { CheckInboxView(email: email).transition(.opacity) }
+        case .recovery: UpdatePasswordView().transition(.opacity)
         case .profile: CompleteProfileView().transition(.opacity)
         case .main:
             if let store = session.store { MainTabView().environment(store).environment(\.avatarLoader, store.avatars).transition(.opacity) }

@@ -63,7 +63,7 @@ final class SupabaseManager: @unchecked Sendable {
             supabaseKey: config.publishableKey,
             options: SupabaseClientOptions(
                 db: .init(encoder: SupabaseCoding.makeEncoder(), decoder: SupabaseCoding.makeDecoder()),
-                auth: .init(emitLocalSessionAsInitialSession: true)))
+                auth: .init(redirectToURL: AuthRedirect.url(.oauth), flowType: .pkce, emitLocalSessionAsInitialSession: true)))
     }
 
     /// The signed-in user's id in the canonical lowercase form the database returns.

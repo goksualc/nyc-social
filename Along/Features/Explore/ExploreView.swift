@@ -5,6 +5,10 @@ struct ExploreView: View {
     @State private var vm: ExploreViewModel
     @Environment(AppStore.self) private var store
     private let location: LocationService
+    @State private var cardExpanded = LaunchOptions.current.detent == "full"
+    @State private var cardHeight: CGFloat = 300
+    @State private var joining = false
+    @State private var hostProfile: IDItem?
 
     init(store: AppStore, location: LocationService) {
         _vm = State(initialValue: ExploreViewModel(store: store, location: location))
@@ -32,6 +36,10 @@ struct ExploreView: View {
             .presentationCornerRadius(AlongRadius.sheet)
             .presentationBackground(AlongColor.offWhite)
         }
+        .sheet(item: $hostProfile) { item in
+            UserProfileSheet(userID: item.id)
+                .presentationCornerRadius(AlongRadius.sheet)
+        }
         .sheet(isPresented: $vm.isCreating) {
             CreateActivityFlow(initialKind: vm.createKind)
                 .alongToasts()
@@ -56,7 +64,7 @@ struct ExploreView: View {
             }
 
             ForEach(vm.activities) { activity in
-                Annotation(activity.title, coordinate: activity.mapCoordinate, anchor: .center) {
+                Annotation(activity.title, coordinate: activity.mapCoordinate, anchor: .bottom) {
                     AlongMapMarker(kind: activity.kind, isSelected: vm.selectedID == activity.id)
                         .onTapGesture { vm.select(activity) }
                         .accessibilityLabel("\(activity.kind.label): \(activity.title), \(ActivityTime.summary(activity, now: store.now))")
@@ -64,7 +72,7 @@ struct ExploreView: View {
                 }
             }
         }
-        .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
+        .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
         .mapControlVisibility(.hidden)
         .onMapCameraChange(frequency: .onEnd) { context in vm.regionChanged(context.region) }
         .task { await vm.reload() }
@@ -90,6 +98,16 @@ struct ExploreView: View {
             .alongFloatingShadow()
             .accessibilityElement(children: .combine)
             Spacer()
+            if vm.selected != nil {
+                Button { Haptics.light(); cardExpanded = false; vm.deselect() } label: {
+                    Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(AlongColor.textPrimary)
+                        .frame(width: 44, height: 44).background(AlongColor.white, in: Circle())
+                        .overlay(Circle().stroke(AlongColor.border, lineWidth: 1)).alongFloatingShadow()
+                }
+                .buttonStyle(AlongPressStyle(scale: 0.94))
+                .accessibilityLabel("Close")
+                .transition(.scale.combined(with: .opacity))
+            }
         }
         .padding(.horizontal, AlongSpacing.md)
         .padding(.top, AlongSpacing.xs)
@@ -116,10 +134,18 @@ struct ExploreView: View {
         ZStack(alignment: .bottom) {
             floatingButtons
             if let selected = vm.selected {
-                ActivityPreviewCard(activity: selected, host: vm.host(of: selected), now: store.now,
-                                    onOpen: { vm.open(selected) }, onClose: { vm.deselect() })
+                ActivityPreviewCard(
+                    activity: selected, host: vm.host(of: selected), role: store.role(in: selected),
+                    isHost: store.isHost(selected), distance: vm.distanceLabel(to: selected), nearby: vm.nearby(to: selected), now: store.now, isWorking: joining,
+                    expanded: $cardExpanded,
+                    onPrimary: { Task { joining = true; await store.requestToJoin(selected); joining = false } },
+                    onOpen: { vm.open(selected) },
+                    onHost: { hostProfile = IDItem(id: selected.hostID) },
+                    onSelect: { cardExpanded = false; vm.select($0) },
+                    onClose: { cardExpanded = false; vm.deselect() })
                     .padding(.horizontal, AlongSpacing.md)
                     .padding(.bottom, AlongSpacing.sm)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
                 discoverySheet
@@ -157,10 +183,11 @@ struct ExploreView: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.trailing, AlongSpacing.md)
-        .padding(.bottom, (vm.selected == nil ? min(vm.sheetHeight, 240) : 190) + AlongSpacing.sm)
-        .opacity(vm.detent == .collapsed || vm.selected != nil ? 1 : 0)
-        .allowsHitTesting(vm.detent == .collapsed || vm.selected != nil)
+        .padding(.bottom, (vm.selected == nil ? min(vm.sheetHeight, 240) : cardHeight) + AlongSpacing.sm + (vm.selected == nil ? 0 : AlongSpacing.xs))
+        .opacity((vm.detent == .collapsed || vm.selected != nil) && !(vm.selected != nil && cardExpanded) ? 1 : 0)
+        .allowsHitTesting((vm.detent == .collapsed || vm.selected != nil) && !(vm.selected != nil && cardExpanded))
         .alongAnimation(value: vm.detent)
+        .alongAnimation(value: cardExpanded)
     }
 
     private var discoverySheet: some View {

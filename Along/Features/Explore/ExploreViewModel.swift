@@ -31,13 +31,20 @@ final class ExploreViewModel {
     init(store: AppStore, location: LocationService) {
         self.store = store
         self.location = location
-        if let id = LaunchOptions.current.select { selectedID = id }
+        if let id = LaunchOptions.current.select {
+            selectedID = id
+            if let a = store.discoverable.first(where: { $0.id == id }) { camera = Self.selectionCamera(for: a) }
+        }
         if let id = LaunchOptions.current.open { presented = IDItem(id: id) }
         if let kind = LaunchOptions.current.create { isCreating = true; createKind = kind == "cowork" ? .cowork : .walk }
     }
 
+    /// Manhattan's street grid is rotated ~29° from north; aligning the camera to it makes the 3D city read cleanly.
+    static let gridHeading: Double = 29
+
     static let overview: MapCameraPosition = .camera(MapCamera(
-        centerCoordinate: CLLocationCoordinate2D(latitude: 40.7530, longitude: -73.9850), distance: 25000))
+        centerCoordinate: CLLocationCoordinate2D(latitude: 40.7480, longitude: -73.9900), distance: 9000,
+        heading: gridHeading, pitch: 50))
 
     nonisolated static let overviewRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 40.7650, longitude: -73.9800),
@@ -154,10 +161,36 @@ final class ExploreViewModel {
         alongWithAnimation {
             selectedID = a.id
             detent = .collapsed
-            // Nudge the centre south so the marker sits above the preview card.
-            let c = a.mapCoordinate
-            camera = .camera(MapCamera(centerCoordinate: CLLocationCoordinate2D(latitude: c.latitude - 0.0035, longitude: c.longitude), distance: 4500))
+            // Shift the centre "down-screen" (opposite the camera heading) so the marker sits above the card.
+            camera = Self.selectionCamera(for: a)
         }
+    }
+
+    static func selectionCamera(for a: Activity) -> MapCameraPosition {
+        let c = a.mapCoordinate
+        let distance = 1800.0
+        let shift = distance * 0.55 / 111_000
+        let rad = (gridHeading + 180) * .pi / 180
+        let center = CLLocationCoordinate2D(latitude: c.latitude + cos(rad) * shift,
+                                            longitude: c.longitude + sin(rad) * shift / cos(c.latitude * .pi / 180))
+        return .camera(MapCamera(centerCoordinate: center, distance: distance, heading: gridHeading, pitch: 60))
+    }
+
+    /// "1.2 miles" from the user's last known location, or nil when location isn't available.
+    func distanceLabel(to a: Activity) -> String? {
+        guard let here = location.lastLocation else { return nil }
+        let m = CLLocation(latitude: here.cl.latitude, longitude: here.cl.longitude)
+            .distance(from: CLLocation(latitude: a.mapCoordinate.latitude, longitude: a.mapCoordinate.longitude))
+        let miles = m / 1609.34
+        return miles < 0.1 ? "Nearby" : String(format: "%.1f %@", miles, (miles * 10).rounded() == 10 ? "mile" : "miles")
+    }
+
+    /// The closest other plans to `a` (within 2 km), nearest first.
+    func nearby(to a: Activity, limit: Int = 3) -> [Activity] {
+        let here = CLLocation(latitude: a.mapCoordinate.latitude, longitude: a.mapCoordinate.longitude)
+        return activities.filter { $0.id != a.id }
+            .map { ($0, here.distance(from: CLLocation(latitude: $0.mapCoordinate.latitude, longitude: $0.mapCoordinate.longitude))) }
+            .filter { $0.1 <= 2000 }.sorted { $0.1 < $1.1 }.prefix(limit).map(\.0)
     }
 
     func deselect() {
@@ -192,6 +225,6 @@ final class ExploreViewModel {
             return
         }
         Haptics.light()
-        alongWithAnimation { camera = .camera(MapCamera(centerCoordinate: here.cl, distance: 3000)) }
+        alongWithAnimation { camera = .camera(MapCamera(centerCoordinate: here.cl, distance: 2500, heading: Self.gridHeading, pitch: 55)) }
     }
 }

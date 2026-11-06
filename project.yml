@@ -41,6 +41,11 @@ targets:
         UIRequiredDeviceCapabilities: [arm64]
         NSLocationWhenInUseUsageDescription: Along uses your approximate location to centre the map on you. It is never shared with other people.
         ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.along.app.auth
+            CFBundleURLSchemes: [com.along.app]
+        LEGAL_TERMS_URL: $(LEGAL_TERMS_URL)
+        LEGAL_PRIVACY_URL: $(LEGAL_PRIVACY_URL)
         SUPABASE_URL: $(SUPABASE_URL)
         SUPABASE_PUBLISHABLE_KEY: $(SUPABASE_PUBLISHABLE_KEY)
     settings:

@@ -15,6 +15,7 @@ struct AlongApp: App {
                 .environment(location)
                 .preferredColorScheme(.light)   // the brand palette is light-only
                 .task { await session.start() }
+                .onOpenURL { url in Task { await session.handle(url: url) } }
                 .onChange(of: scenePhase) { _, phase in Task { await session.store?.scenePhaseChanged(phase) } }
         }
     }

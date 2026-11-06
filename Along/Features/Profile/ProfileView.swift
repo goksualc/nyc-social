@@ -74,7 +74,7 @@ struct ProfileView: View {
                             link(.about, "info.circle", "About Along")
                             if session.isLive {
                                 AlongDivider()
-                                Button { confirmSignOut = true } label: { SettingsRow(symbol: "rectangle.portrait.and.arrow.right", title: "Sign Out", showsChevron: false) }
+                                Button { confirmSignOut = true } label: { SettingsRow(symbol: "rectangle.portrait.and.arrow.right", title: "Log Out", showsChevron: false) }
                                     .buttonStyle(.plain)
                                 AlongDivider()
                                 Button { confirmDelete = true } label: { SettingsRow(symbol: "trash", title: "Delete Account", showsChevron: false, tint: AlongColor.destructive) }
@@ -98,8 +98,8 @@ struct ProfileView: View {
                 case .about: AboutView()
                 }
             }
-            .confirmationDialog("Sign out of Along?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-                Button("Sign Out", role: .destructive) { Task { await session.signOut() } }
+            .confirmationDialog("Log out of Along?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+                Button("Log Out", role: .destructive) { Task { await session.signOut() } }
                 Button("Cancel", role: .cancel) {}
             }
             .confirmationDialog("Delete your account?", isPresented: $confirmDelete, titleVisibility: .visible) {

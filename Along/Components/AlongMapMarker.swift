@@ -1,25 +1,30 @@
 import SwiftUI
 
-/// Small, quiet map marker: navy with a walking figure for walks, white with a laptop for cowork.
+/// A floating rounded-square marker with a small stem. White with a navy glyph at rest; navy with a white glyph when selected.
+/// Walk and Cowork differ only by glyph, so the map stays calm.
 struct AlongMapMarker: View {
     let kind: ActivityKind
     var isSelected = false
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(kind == .walk ? AlongColor.navy : AlongColor.white)
-                .frame(width: 34, height: 34)
-                .overlay(Circle().stroke(kind == .walk ? AlongColor.white : AlongColor.navy, lineWidth: 2))
-                .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+        VStack(spacing: 0) {
             Image(systemName: kind.symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(kind == .walk ? AlongColor.white : AlongColor.navy)
+                .font(.system(size: isSelected ? 20 : 17, weight: .semibold))
+                .foregroundStyle(isSelected ? AlongColor.white : AlongColor.navy)
+                .frame(width: isSelected ? 50 : 42, height: isSelected ? 50 : 42)
+                .background(isSelected ? AlongColor.navy : AlongColor.white,
+                            in: RoundedRectangle(cornerRadius: isSelected ? 16 : 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: isSelected ? 16 : 14, style: .continuous)
+                    .stroke(isSelected ? AlongColor.white : AlongColor.border, lineWidth: isSelected ? 2 : 1))
+                .shadow(color: .black.opacity(isSelected ? 0.28 : 0.16), radius: isSelected ? 10 : 6, y: isSelected ? 5 : 3)
+            Capsule()
+                .fill(isSelected ? AlongColor.navy : AlongColor.white)
+                .frame(width: 3, height: isSelected ? 9 : 6)
+                .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
         }
-        .scaleEffect(isSelected ? 1.22 : 1)
         .alongAnimation(.alongQuick, value: isSelected)
-        .frame(width: AlongSize.minTouch, height: AlongSize.minTouch)
-        .contentShape(Circle())
+        .frame(minWidth: AlongSize.minTouch)
+        .contentShape(Rectangle())
     }
 }
 

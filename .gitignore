@@ -10,3 +10,5 @@ Config/Secrets.xcconfig
 .env.*
 supabase/.temp/
 supabase/.branches/
+scratchpad/
+DerivedData/

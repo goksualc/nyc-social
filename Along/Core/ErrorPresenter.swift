@@ -1,5 +1,6 @@
 import Foundation
 import Supabase
+import AuthenticationServices
 
 /// Turns anything the stack can throw into a short, friendly sentence. Raw database or HTTP errors never reach the UI.
 enum ErrorPresenter {
@@ -22,12 +23,36 @@ enum ErrorPresenter {
             if pg.code == "23505" { return .alreadyRequested }       // unique_violation
             return .generic
         }
-        if error is AuthError { return .sessionExpired }
+        if let auth = error as? AuthError { return map(auth) }
+        if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { return .cancelled }
         if let storage = error as? StorageError {
             return storage.statusCode == "413" ? .imageTooLarge : .uploadFailed
         }
         if let http = error as? HTTPError, http.response.statusCode == 401 { return .sessionExpired }
         return .generic
+    }
+
+    /// Supabase Auth failures. Messages stay generic where specifics would reveal whether an account exists.
+    static func map(_ error: AuthError) -> AlongError {
+        switch error {
+        case .weakPassword: return .weakPassword
+        case .sessionMissing: return .sessionExpired
+        case .pkceGrantCodeExchange, .implicitGrantRedirect: return .invalidLink
+        case .api(_, let code, _, _):
+            switch code {
+            case .invalidCredentials: return .invalidCredentials
+            case .emailNotConfirmed: return .emailNotConfirmed
+            case .weakPassword: return .weakPassword
+            case .samePassword: return .samePassword
+            case .overRequestRateLimit, .overEmailSendRateLimit: return .tooManyAttempts
+            case .providerDisabled, .oauthProviderNotSupported, .emailProviderDisabled: return .providerUnavailable
+            case .flowStateNotFound, .flowStateExpired, .otpExpired, .badOAuthCallback, .badOAuthState, .badCodeVerifier: return .invalidLink
+            case .sessionNotFound, .sessionExpired, .refreshTokenNotFound, .refreshTokenAlreadyUsed,
+                 .badJWT, .invalidJWT, .noAuthorization, .userNotFound: return .sessionExpired
+            default: return .generic
+            }
+        default: return .generic
+        }
     }
 
     /// User-facing text. Specific, mapped problems ("full", "offline") win; otherwise the caller's contextual fallback.
