@@ -209,34 +209,3 @@ struct RouteSearchSheet: View {
     }
 }
 
-/// The walks behind a numbered cluster. A row opens the normal Walk Details (with Request to Join) inside this same sheet.
-struct ClusterWalksSheet: View {
-    let vm: ExploreViewModel
-    @Environment(AppStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: AlongSpacing.sm) {
-                    if vm.clusterWalks.isEmpty {
-                        Text("These walks are no longer available.").font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
-                            .padding(.top, AlongSpacing.xl)
-                    }
-                    ForEach(vm.clusterWalks) { walk in
-                        NavigationLink(value: AlongRoute.activity(walk.id)) {
-                            AlongActivityCard(activity: walk, host: store.host(of: walk), now: store.now)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(AlongSpacing.gutter)
-            }
-            .alongScreenBackground()
-            .navigationTitle("\(vm.clusterWalks.count) walks here")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } } }
-            .alongDestinations()
-        }
-    }
-}

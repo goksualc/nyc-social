@@ -173,7 +173,7 @@ actor MockAlongBackend: AlongBackend, DemoService {
             id: UUID().uuidString, title: draft.title, hostID: me, walk: draft.walk,
             startDate: draft.startDate, endDate: draft.endDate, visibility: .public,       // a walk is always on the map
             capacity: min(max(draft.capacity, 1), 5), note: draft.note, meetingDetails: draft.meetingDetails, createdAt: now,
-            hostAnonymous: draft.anonymousHost, hostInterests: draft.anonymousHost ? Array(draft.hostInterests.prefix(4)) : [],
+            hostAnonymous: draft.anonymousHost, hostInterests: Array(draft.hostInterests.prefix(3)),
             mindPrompt: draft.mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : String(draft.mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140)))
         db.activities.append(activity)
         return snapshot()

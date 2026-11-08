@@ -4,9 +4,9 @@ import Supabase
 /// One channel per signed-in user with four RLS-scoped listeners. Realtime evaluates each table's SELECT policy per
 /// subscriber, so clients only ever receive rows they could query themselves:
 ///  - `join_requests`  (requester's own + requests for plans they host)     → requestsChanged
-///  - `messages` INSERT (conversations they're in, not blocked)             → message
+///  - `chat_pings` INSERT (conversations they're in)                        → conversationsChanged
+///    (the app can't read `messages` any more; a ping carries no content and no ids, just "something happened in chat X")
 ///  - `activities`     filtered to plans they host                          → activityChanged
-///  - `conversation_participants` INSERT for them                           → conversationsChanged
 /// Guests are told about edits/cancellations through their own `join_requests` rows (the RPCs touch them),
 /// so nobody subscribes to every activity in the city.
 actor SupabaseRealtimeService: RealtimeService {
@@ -25,23 +25,15 @@ actor SupabaseRealtimeService: RealtimeService {
 
         let channel = manager.client.realtimeV2.channel("along-\(userID)")
         let requests = channel.postgresChange(AnyAction.self, schema: "public", table: "join_requests")
-        let messages = channel.postgresChange(InsertAction.self, schema: "public", table: "messages")
+        let pings = channel.postgresChange(InsertAction.self, schema: "public", table: "chat_pings")
         let activities = channel.postgresChange(AnyAction.self, schema: "public", table: "activities",
                                                 filter: .eq("creator_id", value: userID))
-        let participants = channel.postgresChange(InsertAction.self, schema: "public", table: "conversation_participants",
-                                                  filter: .eq("user_id", value: userID))
-        let decoder = manager.decoder
         self.channel = channel
 
         tasks = [
             Task { for await _ in requests { continuation.yield(.requestsChanged) } },
             Task { for await _ in activities { continuation.yield(.activityChanged) } },
-            Task { for await _ in participants { continuation.yield(.conversationsChanged) } },
-            Task {
-                for await insert in messages {
-                    if let row = try? insert.decodeRecord(as: MessageRow.self, decoder: decoder) { continuation.yield(.message(row.message)) }
-                }
-            },
+            Task { for await _ in pings { continuation.yield(.conversationsChanged) } },
             // Reconnect handling: after any drop, the next return to `.subscribed` triggers a full refresh.
             Task {
                 var hasBeenSubscribed = false

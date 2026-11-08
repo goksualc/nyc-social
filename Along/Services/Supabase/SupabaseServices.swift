@@ -277,7 +277,7 @@ final class SupabaseActivityService: ActivityService, @unchecked Sendable {
                 pStartLng: w.from.coordinate.longitude, pStartLat: w.from.coordinate.latitude,
                 pEndLng: w.to.coordinate.longitude, pEndLat: w.to.coordinate.latitude,
                 pRoute: route, pMeetingDetails: d.meetingDetails,
-                pAnonymousHost: d.anonymousHost, pHostInterests: d.anonymousHost ? Array(d.hostInterests.prefix(4)) : [],
+                pAnonymousHost: d.anonymousHost, pHostInterests: Array(d.hostInterests.prefix(3)),
                 pMindPrompt: String(d.mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140)))).execute().value
         return try await loader.load()
     }
@@ -342,24 +342,17 @@ final class SupabaseMessagingService: MessagingService, @unchecked Sendable {
     func sendMessage(conversationID: ID, text: String) async throws -> Message {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AlongError.notAllowed }
-        do {
-            let row: MessageRow = try await client.from("messages")
-                .insert(MessageInsert(conversationId: conversationID, content: String(trimmed.prefix(2000))))
-                .select(SupabaseSnapshotLoader.messageColumns).single().execute().value
-            return row.message
-        } catch let error as PostgrestError where error.code == "42501" {
-            throw AlongError.chatClosed               // RLS: conversation closed, blocked, or not a participant
-        }
+        // `send_message` checks the chat is open (also before a request is accepted), applies the rate limits, and returns the
+        // message with the sender shown as an alias when the organizer is hidden.
+        let row: MessageRow = try await client.rpc("send_message", params: SendMessageParams(
+            pConversation: conversationID, pContent: String(trimmed.prefix(2000)))).execute().value
+        return row.message
     }
 
     func loadMessages(conversationID: ID, before: Date?, limit: Int) async throws -> [Message] {
-        var query = client.from("messages").select(SupabaseSnapshotLoader.messageColumns)
-            .eq("conversation_id", value: conversationID)
-        if let before { query = query.lt("created_at", value: SupabaseCoding.format(before)) }
-        let rows: [MessageRow] = try await query
-            .order("created_at", ascending: false).order("id", ascending: false)
-            .limit(limit).execute().value
-        return rows.reversed().map(\.message)
+        let rows: [MessageRow] = try await client.rpc("list_my_messages", params: ListMessagesParams(
+            pConversation: conversationID, pBefore: before, pLimit: limit)).execute().value
+        return rows.reversed().map(\.message)        // the RPC returns newest first
     }
 }
 

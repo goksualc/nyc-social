@@ -25,6 +25,7 @@ enum AlongError: LocalizedError, Sendable, Equatable {
         case "not_found": self = .notFound
         case "not_allowed": self = .notAllowed
         case "blocked": self = .blocked
+        case "chat_closed": self = .chatClosed
         case "activity_full": self = .activityFull
         case "already_requested": self = .alreadyRequested
         case "request_declined": self = .requestDeclined

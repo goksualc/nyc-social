@@ -14,6 +14,9 @@ struct ExploreView: View {
     @State private var routeSearch = RouteSearchModel()
     @State private var showRouteSearch = false
     @Namespace private var mapScope
+    @State private var pagerID: ID?
+    /// The tallest page's natural height, so every page is exactly the same size.
+    @State private var pageHeight: CGFloat = 0
 
     init(store: AppStore, location: LocationService) {
         _vm = State(initialValue: ExploreViewModel(store: store, location: location))
@@ -35,7 +38,8 @@ struct ExploreView: View {
             }
             mapControls
             if vm.selected == nil { statusPill.padding(.bottom, 96) }
-            if let selected = vm.selected { card(for: selected) }
+            if vm.isClusterOpen, vm.clusterWalks.count > 1 { clusterPager }
+            else if let selected = vm.selected { card(for: selected) }
         }
         .background(AlongColor.navy)
         .mapScope(mapScope)
@@ -58,14 +62,6 @@ struct ExploreView: View {
                              dateLabel: vm.dateFilter == .all ? nil : vm.label(for: vm.dateFilter)) { vm.select($0) }
                 .alongToasts()
                 .presentationDetents([.medium, .large])
-                .presentationCornerRadius(AlongRadius.sheet)
-                .presentationBackground(AlongColor.offWhite)
-        }
-        .sheet(isPresented: $vm.isClusterOpen) {
-            ClusterWalksSheet(vm: vm)
-                .alongToasts()
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
                 .presentationCornerRadius(AlongRadius.sheet)
                 .presentationBackground(AlongColor.offWhite)
         }
@@ -131,7 +127,10 @@ struct ExploreView: View {
         .mapStyle(.hybrid(elevation: .realistic, pointsOfInterest: .excludingAll, showsTraffic: false))
         .mapControlVisibility(.hidden)
         .onMapCameraChange(frequency: .onEnd) { context in vm.regionChanged(context.region) }
-        .task { await vm.reload() }
+        .task {
+            await vm.reload()
+            if LaunchOptions.current.cluster, let c = vm.mapItems.compactMap({ item -> ExploreViewModel.Cluster? in if case .cluster(let k) = item { return k }; return nil }).first { vm.openCluster(c) }
+        }
         .onTapGesture { vm.deselect() }
         .ignoresSafeArea()
     }
@@ -199,10 +198,44 @@ struct ExploreView: View {
 
     // MARK: Selected walk
 
-    private func card(for selected: Activity) -> some View {
-        ActivityPreviewCard(
+    /// Several walks at one spot: the very same card, one per page, swiped sideways.
+    private var clusterPager: some View {
+        let walks = vm.clusterWalks
+        let index = walks.firstIndex { $0.id == vm.selectedID } ?? 0
+        return VStack(spacing: AlongSpacing.xs) {
+            HStack(spacing: 6) {
+                ForEach(walks.indices, id: \.self) { i in
+                    Circle().fill(i == index ? AlongColor.white : AlongColor.white.opacity(0.4)).frame(width: 6, height: 6)
+                }
+                Text("\(index + 1) of \(walks.count)").font(.footnote.weight(.semibold)).foregroundStyle(.white).padding(.leading, 4)
+            }
+            .padding(.horizontal, 14).frame(height: 30).alongGlass(in: Capsule())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Walk \(index + 1) of \(walks.count)")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(walks) { walk in
+                        card(for: walk, minHeight: pageHeight > 0 ? pageHeight : nil)
+                            .background(GeometryReader { Color.clear.preference(key: CardHeightKey.self, value: $0.size.height) })
+                            .containerRelativeFrame(.horizontal).id(walk.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $pagerID)
+        }
+        .onAppear { pagerID = vm.selectedID; pageHeight = 0 }
+        .onPreferenceChange(CardHeightKey.self) { pageHeight = max(pageHeight, $0) }
+        .onChange(of: pagerID) { _, id in if let id { vm.page(to: id) } }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func card(for selected: Activity, minHeight: CGFloat? = nil) -> some View {
+        ActivityPreviewCard(minHeight: minHeight,
+            
             activity: selected, host: vm.host(of: selected), guests: selected.participantIDs.compactMap { store.user($0) },
-            role: store.role(in: selected), isHost: store.isHost(selected), route: vm.selectedRoute,
+            role: store.role(in: selected), isHost: store.isHost(selected), route: selected.id == vm.selectedID ? vm.selectedRoute : nil,
             now: store.now, isWorking: joining,
             onPrimary: { Task { joining = true; await store.requestToJoin(selected); joining = false } },
             onOpen: { vm.open(selected) },
@@ -210,4 +243,9 @@ struct ExploreView: View {
             onClose: { vm.deselect() })
             .transition(.move(edge: .bottom).combined(with: .opacity))
     }
+}
+
+private struct CardHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }

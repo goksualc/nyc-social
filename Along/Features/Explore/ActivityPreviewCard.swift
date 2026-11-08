@@ -3,6 +3,8 @@ import SwiftUI
 /// The white sheet that rises over the map when a walk is selected: what it is, who's hosting, when and where, and one clear
 /// next step. Everything is read from the real activity; nothing is invented (distance and time are route estimates).
 struct ActivityPreviewCard: View {
+    /// Set when several cards are paged side by side, so they're all the same height.
+    var minHeight: CGFloat?
     let activity: Activity
     let host: User?
     /// Accepted guests we're allowed to see (only the host and members see names; others get just a count).
@@ -36,6 +38,10 @@ struct ActivityPreviewCard: View {
                             .lineLimit(3).minimumScaleFactor(0.75).fixedSize(horizontal: false, vertical: true)
                         Text(tagline).font(.system(.callout)).italic().foregroundStyle(AlongColor.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if !activity.hostInterests.isEmpty {
+                            FlowLayout(spacing: 6) { ForEach(activity.hostInterests, id: \.self) { AlongChip(title: $0) } }
+                                .padding(.top, 2)
+                        }
                     }
                     infoRows
                 }
@@ -44,6 +50,7 @@ struct ActivityPreviewCard: View {
             }
             .frame(maxHeight: UIScreen.main.bounds.height * 0.36)      // the rest of the screen stays map
 
+            if minHeight != nil { Spacer(minLength: 0) }
             VStack(spacing: AlongSpacing.sm) {
                 primaryButton
                 hostRow
@@ -52,13 +59,14 @@ struct ActivityPreviewCard: View {
             .padding(.top, AlongSpacing.xs)
             .padding(.bottom, AlongSpacing.sm)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .top)
         .background { shape.fill(AlongColor.white).ignoresSafeArea(edges: .bottom).shadow(color: .black.opacity(0.22), radius: 24, y: -4) }
         .offset(y: max(drag, 0) * 0.7)
-        .gesture(
+        // Simultaneous, and only for mostly-vertical drags, so a sideways swipe still pages between walks.
+        .simultaneousGesture(
             DragGesture(minimumDistance: 12)
-                .updating($drag) { v, s, _ in s = v.translation.height }
-                .onEnded { v in if v.translation.height > 90 { onClose() } }
+                .updating($drag) { v, s, _ in if abs(v.translation.height) > abs(v.translation.width) { s = v.translation.height } }
+                .onEnded { v in if v.translation.height > 90, abs(v.translation.height) > abs(v.translation.width) { onClose() } }
         )
         .accessibilityElement(children: .contain)
     }

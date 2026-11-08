@@ -218,7 +218,9 @@ final class ExploreViewModel {
         var buckets: [String: [Activity]] = [:]
         var singles: [Activity] = []
         for a in list {
-            if a.id == selectedID { singles.append(a); continue }
+            // The selected walk normally stands alone, but while a cluster's cards are open it stays inside its cluster
+            // so the numbered marker (and its highlight) doesn't change as you swipe.
+            if a.id == selectedID, !isClusterOpen { singles.append(a); continue }
             let c = a.mapCoordinate
             buckets["\(Int((c.latitude / cell).rounded(.down)))_\(Int((c.longitude / cell).rounded(.down)))", default: []].append(a)
         }
@@ -232,12 +234,22 @@ final class ExploreViewModel {
         return items
     }
 
-    /// Tapping a cluster lists its walks in a sheet. The camera is left alone: walks that share a spot never separate by
-    /// zooming, so zooming could not be what makes them reachable.
+    /// Tapping a cluster opens the same walk card a single pin opens, as swipeable pages (earliest walk first). The camera is
+    /// left alone: walks that share a spot never separate by zooming, so zooming could not be what makes them reachable.
     func openCluster(_ cluster: Cluster) {
         Haptics.light()
-        openClusterWalkIDs = cluster.activities.map(\.id)
+        let ordered = cluster.activities.sorted { $0.startDate < $1.startDate }
+        openClusterWalkIDs = ordered.map(\.id)
         openClusterKey = cluster.activities.map(\.id).sorted().joined(separator: ",")
+        if let first = ordered.first { alongWithAnimation { selectedID = first.id; detent = .collapsed }; loadRoute(for: first) }
+    }
+
+    /// Swiping to another page: that walk becomes the selected one (its route is drawn) without moving the map.
+    func page(to id: ID) {
+        guard id != selectedID, let a = store.activity(id) else { return }
+        Haptics.selection()
+        selectedID = id
+        loadRoute(for: a)
     }
 
     func closeCluster() { openClusterWalkIDs = []; openClusterKey = nil }
@@ -260,6 +272,7 @@ final class ExploreViewModel {
         alongWithAnimation {
             dateFilter = f
             if let id = selectedID, selected == nil || !activities.contains(where: { $0.id == id }) { selectedID = nil; selectedRoute = nil }
+            if clusterWalks.isEmpty { closeCluster() }
         }
         Task { await reload(force: true) }
     }
@@ -320,9 +333,9 @@ final class ExploreViewModel {
     }
 
     func deselect() {
-        guard selectedID != nil else { return }
+        guard selectedID != nil || isClusterOpen else { return }
         routeTask?.cancel()
-        alongWithAnimation { selectedID = nil; selectedRoute = nil }
+        alongWithAnimation { selectedID = nil; selectedRoute = nil; closeCluster() }
     }
 
     func open(_ a: Activity) {

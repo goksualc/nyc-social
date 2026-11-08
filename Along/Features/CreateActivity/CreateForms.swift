@@ -16,19 +16,37 @@ struct CreateWalkView: View {
         } content: {
             Text("Where are we walking?")
                 .font(AlongFont.walkScreenHeading).foregroundStyle(AlongColor.textPrimary)
-            AlongFieldRow(label: "Starting location", value: vm.from?.publicLabel, placeholder: "Starting street or place", symbol: "location") { picking = .from }
-            AlongFieldRow(label: "Destination", value: vm.to?.publicLabel, placeholder: "Where are you headed?", symbol: "flag") { picking = .to }
-            if let hint = vm.walkHint { Text(hint).font(AlongFont.caption).foregroundStyle(AlongColor.destructive) }
-            routePreview
-            WhenField(label: "Date & time", date: $vm.start)
-            OptionField(label: "Walking pace", options: Pace.allCases.map(\.rawValue), selection: Binding(
-                get: { Pace.allCases.firstIndex(of: vm.pace) ?? 0 }, set: { vm.pace = Pace.allCases[$0] }))
-            SpotsField(label: "Available spots", spots: $vm.spots)
-            AlongTextField(label: "Description", text: $vm.note, prompt: "Optional", axis: .vertical, lines: 1...3, limit: 140)
-            AlongTextField(label: "What's on your mind?", text: $vm.mindPrompt, prompt: "Life, work, random thoughts... anything really.",
-                           axis: .vertical, lines: 1...3, limit: 140)
-            AlongTextField(label: "Meeting spot", text: $vm.meetingDetails, prompt: "Shared only after you accept someone", axis: .vertical, lines: 1...3, limit: 140)
-            HostVisibilityField(vm: vm)
+
+            // 1 · Route
+            VStack(alignment: .leading, spacing: AlongSpacing.sm) {
+                AlongFieldRow(label: "Starting location", value: vm.from?.publicLabel, placeholder: "Starting street or place", symbol: "location") { picking = .from }
+                AlongFieldRow(label: "Destination", value: vm.to?.publicLabel, placeholder: "Where are you headed?", symbol: "flag") { picking = .to }
+                if let hint = vm.walkHint { Text(hint).font(AlongFont.caption).foregroundStyle(AlongColor.destructive) }
+                routePreview
+            }
+
+            // 2 · When and how
+            section("When") {
+                WhenField(label: "Date & time", date: $vm.start)
+                OptionField(label: "Walking pace", options: Pace.allCases.map(\.rawValue), selection: Binding(
+                    get: { Pace.allCases.firstIndex(of: vm.pace) ?? 0 }, set: { vm.pace = Pace.allCases[$0] }))
+                SpotsField(label: "Available spots", spots: $vm.spots)
+            }
+
+            // 3 · What it's about
+            section("What it's about") {
+                AlongTextField(label: "What's on your mind?", text: $vm.mindPrompt,
+                               prompt: "Career thoughts, life updates, random overthinking... anything really.",
+                               axis: .vertical, lines: 1...3, limit: 140)
+                TagPicker(vm: vm)
+                AlongTextField(label: "Description", text: $vm.note, prompt: "Optional", axis: .vertical, lines: 1...3, limit: 140)
+                AlongTextField(label: "Meeting spot", text: $vm.meetingDetails, prompt: "Shared only after you accept someone", axis: .vertical, lines: 1...3, limit: 140)
+            }
+
+            // 4 · Who sees you
+            section("Who sees you") { HostVisibilityField(vm: vm) }
+
+            WalkSummaryCard(vm: vm)
         }
         .sheet(item: $picking) { slot in
             PlaceSearchView(title: slot == .from ? "Starting point" : "Destination") { place in
@@ -39,6 +57,13 @@ struct CreateWalkView: View {
             .presentationBackground(AlongColor.offWhite)
         }
         .task(id: [vm.from?.coordinate, vm.to?.coordinate].compactMap { $0 }) { await vm.updateRoute() }
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: AlongSpacing.md) {
+            Text(title).font(AlongFont.sectionHeading).foregroundStyle(AlongColor.textPrimary)
+            content()
+        }
     }
 
     @ViewBuilder private var routePreview: some View {
@@ -56,8 +81,10 @@ struct CreateWalkView: View {
                 .frame(height: 160)
                 .clipShape(RoundedRectangle(cornerRadius: AlongRadius.card, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: AlongRadius.card, style: .continuous).stroke(AlongColor.border, lineWidth: 1))
-                Text(vm.route.map { "\($0.summary) · approximate route" } ?? "Finding route…")
-                    .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                Text(vm.routeLine ?? "Finding route…")
+                    .font(AlongFont.subheadEmphasis).foregroundStyle(AlongColor.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(vm.routeLine ?? "Finding route")
             }
             .transition(.opacity)
         }
@@ -130,43 +157,98 @@ struct SpotsField: View {
     }
 }
 
-/// Public: your profile shows. Private: the walk is still on the map for everyone, but you appear as "Anonymous Walker".
+/// Public / Private Host / Anonymous Host as three tappable rows, each with one line saying exactly what it shows.
 struct HostVisibilityField: View {
     @Bindable var vm: CreateActivityViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-            OptionField(label: "Visibility", options: Visibility.allCases.map(\.rawValue), selection: Binding(
-                get: { Visibility.allCases.firstIndex(of: vm.visibility) ?? 0 }, set: { vm.visibility = Visibility.allCases[$0] }))
-            Text(vm.hidesIdentity ? "Your walk will appear on the map, but your identity will remain hidden."
-                                  : "Your profile will be visible to people exploring this walk.")
-                .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
-            Text("Private walks are still visible to everyone. Only your identity is hidden.")
-                .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
-
-            if vm.hidesIdentity {
-                VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                    Text("Interests to show instead of a profile").font(AlongFont.label).foregroundStyle(AlongColor.textTertiary)
-                    if vm.myHobbies.isEmpty {
-                        Text("Add interests to your profile and you can show a few of them here. People will only see the ones you pick.")
-                            .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
-                    } else {
-                        FlowLayout(spacing: 8) {
-                            ForEach(vm.myHobbies, id: \.self) { hobby in
-                                Button { Haptics.selection(); vm.toggleInterest(hobby) } label: {
-                                    AlongChip(title: hobby, isSelected: vm.hostInterests.contains(hobby)).frame(minHeight: AlongSize.minTouch)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityAddTraits(vm.hostInterests.contains(hobby) ? .isSelected : [])
-                            }
+        VStack(spacing: AlongSpacing.xs) {
+            ForEach(CreateActivityViewModel.HostMode.allCases) { mode in
+                let on = vm.hostMode == mode
+                Button { Haptics.selection(); alongWithAnimation(.alongQuick) { vm.hostMode = mode } } label: {
+                    HStack(alignment: .top, spacing: AlongSpacing.sm) {
+                        Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20)).foregroundStyle(on ? AlongColor.navy : AlongColor.border)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(mode.rawValue).font(AlongFont.bodyEmphasis).foregroundStyle(AlongColor.textPrimary)
+                            Text(mode.detail).font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        Text("Up to four. Your name, photo, socials and bio stay hidden.").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                        Spacer(minLength: 0)
                     }
+                    .padding(AlongSpacing.md - 2)
+                    .frame(maxWidth: .infinity, minHeight: AlongSize.minTouch, alignment: .leading)
+                    .background(AlongColor.white, in: RoundedRectangle(cornerRadius: AlongRadius.control, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: AlongRadius.control, style: .continuous)
+                        .stroke(on ? AlongColor.navy : AlongColor.border, lineWidth: on ? 1.5 : 1))
+                    .contentShape(Rectangle())
                 }
-                .padding(.top, AlongSpacing.xs)
-                .transition(.opacity)
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+            Text("Every walk is on the map for everyone. This only decides what people see about you.")
+                .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
+        }
+    }
+}
+
+/// Up to three optional topic tags.
+struct TagPicker: View {
+    @Bindable var vm: CreateActivityViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AlongSpacing.xs) {
+            HStack {
+                Text("Topics").font(AlongFont.label).foregroundStyle(AlongColor.textTertiary)
+                Spacer()
+                Text("\(vm.tags.count) of \(CreateActivityViewModel.maxTags)").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+            }
+            FlowLayout(spacing: 8) {
+                ForEach(CreateActivityViewModel.tagOptions, id: \.self) { tag in
+                    let on = vm.tags.contains(tag)
+                    let full = !on && vm.tags.count >= CreateActivityViewModel.maxTags
+                    Button { vm.toggleTag(tag) } label: {
+                        AlongChip(title: tag, isSelected: on).frame(minHeight: AlongSize.minTouch).opacity(full ? 0.4 : 1)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(full)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+            if vm.hostMode == .anonymousHost && !vm.tags.isEmpty {
+                Text("Anonymous Host shares no tags. They stay off this walk.").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
             }
         }
-        .alongAnimation(value: vm.hidesIdentity)
+    }
+}
+
+/// What the walk will look like, updating as the form changes.
+struct WalkSummaryCard: View {
+    let vm: CreateActivityViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AlongSpacing.sm) {
+            Text("Your walk").font(AlongFont.label).foregroundStyle(AlongColor.textTertiary)
+            row("point.topleft.down.to.point.bottomright.curvepath", vm.routeLine ?? "Choose a start and a destination")
+            row("calendar", vm.start.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()))
+            row("speedometer", "\(vm.pace.rawValue) pace · \(vm.spots) \(vm.spots == 1 ? "spot" : "spots")")
+            row(vm.hostMode.hidesIdentity ? "eye.slash" : "person.crop.circle", vm.hostMode.rawValue)
+            if !vm.publishedTags.isEmpty {
+                FlowLayout(spacing: 6) { ForEach(vm.publishedTags, id: \.self) { AlongChip(title: $0) } }
+            }
+        }
+        .padding(AlongSpacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AlongColor.white, in: RoundedRectangle(cornerRadius: AlongRadius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: AlongRadius.card, style: .continuous).stroke(AlongColor.border, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func row(_ symbol: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: AlongSpacing.sm) {
+            Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(AlongColor.navy).frame(width: 20)
+            Text(text).font(AlongFont.subheadEmphasis).foregroundStyle(AlongColor.textPrimary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

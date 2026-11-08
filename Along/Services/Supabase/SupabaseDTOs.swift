@@ -137,15 +137,24 @@ struct JoinRequestRow: Decodable {
     }
 }
 
+struct ListMessagesParams: Encodable {
+    var pConversation: String?
+    var pBefore: Date?
+    var pLimit: Int
+}
+
+struct SendMessageParams: Encodable { var pConversation: String, pContent: String }
+
 struct ConversationRow: Decodable {
     struct Member: Decodable { var userId: String }
     var id: String
     var activityId: String
     var createdAt: Date
+    var requestId: String?
     var conversationParticipants: [Member]
 
     var conversation: Conversation {
-        Conversation(id: id, activityID: activityId, participantIDs: conversationParticipants.map(\.userId), createdAt: createdAt)
+        Conversation(id: id, activityID: activityId, requestID: requestId, participantIDs: conversationParticipants.map(\.userId), createdAt: createdAt)
     }
 }
 

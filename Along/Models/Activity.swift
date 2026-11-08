@@ -57,6 +57,7 @@ struct Activity: Identifiable, Hashable, Codable, Sendable {
     /// `anon:` alias for everyone except the organizer, and no profile can be looked up from it.
     var hostAnonymous = false
     /// The few interests an anonymous organizer chose to show (shown instead of a profile).
+    /// Optional topic tags ("Tech", "Career"…). Stored under the host-interests column; empty for "Anonymous Host" walks.
     var hostInterests: [String] = []
     /// The optional "What's on your mind?" the host wrote. Shown naturally on the walk; never a category.
     var mindPrompt: String?

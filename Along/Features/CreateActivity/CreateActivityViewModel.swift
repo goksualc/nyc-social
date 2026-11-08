@@ -11,7 +11,7 @@ final class CreateActivityViewModel {
     var spots = 2
     var note = ""
     var meetingDetails = ""
-    var visibility: Visibility = .public
+    var hostMode: HostMode = .publicHost
     var isPublishing = false
 
     // Walk
@@ -21,10 +21,34 @@ final class CreateActivityViewModel {
     var route: RoutePreview?
     var routeCamera: MapCameraPosition = .automatic
 
-    // What's on your mind (optional, free text)
+    // What's on your mind (optional, free text) and optional topic tags
     var mindPrompt = ""
-    /// Interests shown instead of a profile when the organizer stays anonymous (at most four, picked from their own).
-    var hostInterests: [String] = []
+    var tags: [String] = []
+
+    /// Who the walk shows as its host. Every walk is on the map for everyone; this is only about the host's identity.
+    enum HostMode: String, CaseIterable, Identifiable {
+        case publicHost = "Public", privateHost = "Private Host", anonymousHost = "Anonymous Host"
+        var id: String { rawValue }
+        var detail: String {
+            switch self {
+            case .publicHost: "Everyone can see you: your name, photo and profile."
+            case .privateHost: "Your walk is visible, but your name and photo stay hidden."
+            case .anonymousHost: "Your walk is visible with minimal host details: no name, photo or tags."
+            }
+        }
+        var hidesIdentity: Bool { self != .publicHost }
+    }
+
+    static let tagOptions = ["Tech", "Startups", "Life", "Creativity", "Literature", "Career", "Random Thoughts", "Psychology"]
+    static let maxTags = 3
+
+    func toggleTag(_ tag: String) {
+        if let i = tags.firstIndex(of: tag) { tags.remove(at: i) }
+        else if tags.count < Self.maxTags { tags.append(tag) }
+    }
+
+    /// Tags go with the walk, except for "Anonymous Host", which shares nothing beyond the walk itself.
+    var publishedTags: [String] { hostMode == .anonymousHost ? [] : Array(tags.prefix(Self.maxTags)) }
 
     init(store: AppStore) {
         self.store = store
@@ -46,6 +70,14 @@ final class CreateActivityViewModel {
         return from.coordinate.distance(to: to.coordinate) > 50
     }
     var walkIsValid: Bool { routeIsValid }
+
+    /// "Midtown → West Village · 32 min · 1.7 miles" once there's a route (nothing is shown until both ends are chosen).
+    var routeLine: String? {
+        guard let from, let to, routeIsValid, let route else { return nil }
+        let miles = route.distance / 1609.344
+        let minutes = max(Int((route.travelTime / 60).rounded()), 1)
+        return String(format: "%@ → %@ · %d min · %.1f miles", from.publicLabel, to.publicLabel, minutes, miles) + (route.isEstimate ? " (estimate)" : "")
+    }
 
     var walkHint: String? {
         guard let from, let to, !routeIsValid else { return nil }
@@ -80,15 +112,6 @@ final class CreateActivityViewModel {
         return "\(daypart(start)) walk to \(to.publicLabel)"
     }
 
-    /// "Private" means: the walk is on the map for everyone, only the organizer's identity is hidden.
-    var hidesIdentity: Bool { visibility == .private }
-    var myHobbies: [String] { store.me.hobbies }
-
-    func toggleInterest(_ hobby: String) {
-        if let i = hostInterests.firstIndex(of: hobby) { hostInterests.remove(at: i) }
-        else if hostInterests.count < 4 { hostInterests.append(hobby) }
-    }
-
     func publishWalk() async -> Bool {
         guard let from, let to, walkIsValid else { return false }
         let draft = ActivityDraft(
@@ -99,7 +122,7 @@ final class CreateActivityViewModel {
             note: note.trimmingCharacters(in: .whitespacesAndNewlines),
             meetingDetails: meetingDetails.trimmingCharacters(in: .whitespacesAndNewlines),
             routeCoordinates: route.map { $0.isEstimate ? [] : Self.downsample($0.coordinates, to: 400) } ?? [],
-            anonymousHost: hidesIdentity, hostInterests: hidesIdentity ? Array(hostInterests.prefix(4)) : [],
+            anonymousHost: hostMode.hidesIdentity, hostInterests: publishedTags,
             mindPrompt: mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
         return await publish(draft)
     }

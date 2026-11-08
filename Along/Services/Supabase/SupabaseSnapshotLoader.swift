@@ -21,10 +21,10 @@ struct SupabaseSnapshotLoader: Sendable {
         async let requestRows: [JoinRequestRow] = db.from("join_requests")
             .select("id, activity_id, requester_id, status, created_at")
             .order("created_at", ascending: false).limit(500).execute().value
-        async let conversationRows: [ConversationRow] = db.from("conversations")
-            .select("id, activity_id, created_at, conversation_participants(user_id)").execute().value
-        async let messageRows: [MessageRow] = db.from("messages").select(Self.messageColumns)
-            .order("created_at", ascending: false).limit(200).execute().value
+        // Chats are read through RPCs that swap a hidden organizer's real id for an opaque alias; the tables themselves are
+        // no longer readable by the app (migration 11).
+        async let conversationRows: [ConversationRow] = db.rpc("list_my_conversations").execute().value
+        async let messageRows: [MessageRow] = db.rpc("list_my_messages", params: ListMessagesParams(pConversation: nil, pBefore: nil, pLimit: 200)).execute().value
         async let blockRows: [BlockRow] = db.from("user_blocks").select("blocked_id, blocked_display_name").execute().value
 
         let (me, cards_, requests_, conversations_, messages_, blocks_) =
@@ -59,6 +59,8 @@ struct SupabaseSnapshotLoader: Sendable {
         wanted.formUnion(requests.map(\.requesterID))
         wanted.formUnion(conversations_.flatMap { $0.conversationParticipants.map(\.userId) })
         wanted.remove(uid)
+        // A hidden organizer appears as an opaque alias ("anon:…"), which is not a profile id and must never be looked up.
+        wanted = wanted.filter { UUID(uuidString: $0) != nil }
         var people: [ID: User] = [:]
         for card in walkCards { people[card.creatorId] = card.host }
         if !wanted.isEmpty {
@@ -71,7 +73,7 @@ struct SupabaseSnapshotLoader: Sendable {
             for row in rows { people[row.id] = row.user }
         }
         // Ages exist only for people who chose to show them; failure just means no age is shown.
-        let ages: [AgeRow] = (try? await db.rpc("profile_ages", params: ["p_ids": Array(people.keys)]).execute().value) ?? []
+        let ages: [AgeRow] = (try? await db.rpc("profile_ages", params: ["p_ids": people.keys.filter { UUID(uuidString: $0) != nil }]).execute().value) ?? []
         for age in ages { people[age.id]?.age = age.age }
         for block in blocks_ where people[block.blockedId] == nil {
             people[block.blockedId] = User(id: block.blockedId, firstName: block.blockedDisplayName ?? "Blocked user",

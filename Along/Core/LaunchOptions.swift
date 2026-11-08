@@ -15,6 +15,10 @@ struct LaunchOptions {
     var inboxFilter: String?
     var onboarding = false
     var readyAll = false
+    /// Opens the first numbered cluster's cards on the map (debug screenshots).
+    var cluster = false
+    /// Forces the first-launch tutorial (optionally at a page) without touching the saved flag.
+    var intro: Int?
 
     static let current: LaunchOptions = {
         #if DEBUG
@@ -24,7 +28,8 @@ struct LaunchOptions {
                              detent: value("-along-detent"), select: value("-along-select"), open: value("-along-open"),
                              create: value("-along-create"), conversation: value("-along-conversation"),
                              welcomeStep: value("-along-welcome-step"), live: args.contains("-along-live"), inboxFilter: value("-along-inbox"),
-                             onboarding: args.contains("-along-onboarding"), readyAll: args.contains("-along-ready"))
+                             onboarding: args.contains("-along-onboarding"), readyAll: args.contains("-along-ready"), cluster: args.contains("-along-cluster"),
+                             intro: args.contains("-along-intro") ? (value("-along-intro-page").flatMap(Int.init) ?? 0) : nil)
         #else
         return LaunchOptions()
         #endif

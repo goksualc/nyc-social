@@ -40,8 +40,64 @@ final class ClusterSheetTests: XCTestCase {
         XCTAssertTrue(vm.isHighlighted(c))
         XCTAssertEqual(Set(vm.clusterWalks.map(\.id)), Set(c.activities.map(\.id)))
         XCTAssertGreaterThanOrEqual(vm.clusterWalks.count, 2)
+        XCTAssertEqual(vm.selectedID, vm.clusterWalks.first?.id, "the first card is selected, as a single pin would be")
+        let second = vm.clusterWalks[1].id
+        vm.page(to: second)
+        XCTAssertEqual(vm.selectedID, second, "swiping selects the page's walk")
+        XCTAssertTrue(vm.isHighlighted(c), "the cluster stays highlighted while paging")
+        XCTAssertTrue(vm.mapItems.contains { if case .cluster(let k) = $0 { return k.id == c.id }; return false }, "the numbered marker doesn't split while its cards are open")
         XCTAssertEqual("\(vm.camera)", cameraBefore, "opening the sheet must not move the map")
-        vm.isClusterOpen = false
+        vm.deselect()
         XCTAssertTrue(vm.clusterWalks.isEmpty)
+        XCTAssertNil(vm.selectedID)
+    }
+}
+
+@MainActor
+final class CreateWalkFormTests: XCTestCase {
+    private func vm() async throws -> CreateActivityViewModel {
+        CreateActivityViewModel(store: try await AppStore.bootstrap(backend: MockAlongBackend()))
+    }
+
+    func testTagsAreLimitedToThree() async throws {
+        let vm = try await vm()
+        for t in ["Tech", "Career", "Life", "Psychology"] { vm.toggleTag(t) }
+        XCTAssertEqual(vm.tags, ["Tech", "Career", "Life"])
+        vm.toggleTag("Career")
+        XCTAssertEqual(vm.tags, ["Tech", "Life"], "tapping a chosen tag removes it")
+    }
+
+    func testHostModesMapToWhatTheServerStores() async throws {
+        let vm = try await vm()
+        vm.tags = ["Tech", "Life"]
+        vm.hostMode = .publicHost
+        XCTAssertFalse(vm.hostMode.hidesIdentity); XCTAssertEqual(vm.publishedTags, ["Tech", "Life"])
+        vm.hostMode = .privateHost
+        XCTAssertTrue(vm.hostMode.hidesIdentity); XCTAssertEqual(vm.publishedTags, ["Tech", "Life"])
+        vm.hostMode = .anonymousHost
+        XCTAssertTrue(vm.hostMode.hidesIdentity); XCTAssertTrue(vm.publishedTags.isEmpty, "Anonymous Host shares no tags")
+    }
+
+    func testPublishingKeepsTagsAndHidesTheHostOnlyWhenAsked() async throws {
+        let store = try await AppStore.bootstrap(backend: MockAlongBackend())
+        let vm = CreateActivityViewModel(store: store)
+        vm.from = NYCGeo.street(40); vm.to = NYCGeo.street(60)
+        vm.tags = ["Career", "Random Thoughts"]
+        vm.mindPrompt = "Career thoughts"
+        vm.hostMode = .privateHost
+        let ok = await vm.publishWalk()
+        XCTAssertTrue(ok)
+        let mine = store.snapshot.activities.first { $0.hostID == store.me.id && $0.mindPrompt == "Career thoughts" }
+        XCTAssertEqual(mine?.hostInterests, ["Career", "Random Thoughts"])
+        XCTAssertEqual(mine?.hostAnonymous, true)
+    }
+
+    func testRouteLineReadsLikeTheDesign() async throws {
+        let vm = try await vm()
+        XCTAssertNil(vm.routeLine)
+        vm.from = NYCGeo.street(40); vm.to = NYCGeo.street(14)
+        await vm.updateRoute()
+        let line = try XCTUnwrap(vm.routeLine)
+        XCTAssertTrue(line.contains("→") && line.contains("min") && line.contains("miles"), line)
     }
 }
