@@ -8,7 +8,7 @@ import Supabase
 ///  - `activities`     filtered to plans they host                          → activityChanged
 ///  - `conversation_participants` INSERT for them                           → conversationsChanged
 /// Guests are told about edits/cancellations through their own `join_requests` rows (the RPCs touch them),
-/// so nobody subscribes to every activity in Manhattan.
+/// so nobody subscribes to every activity in the city.
 actor SupabaseRealtimeService: RealtimeService {
     private let manager: SupabaseManager
     private var channel: RealtimeChannelV2?

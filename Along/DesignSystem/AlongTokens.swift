@@ -16,6 +16,8 @@ extension Color {
 /// Centralised colour tokens. The palette is deliberately small and taken from the brand logos.
 enum AlongColor {
     static let navy = Color(hex: 0x1C2343)
+    /// Soft lime: walking routes, live/active states and the create button. A highlight, never a replacement for navy.
+    static let lime = Color(hex: 0xB8E986)
     static let offWhite = Color(hex: 0xFAF9F6)
     static let white = Color.white
     static let textPrimary = Color(hex: 0x202020)
@@ -39,7 +41,35 @@ enum AlongColor {
 
 /// SF Pro for interface text. A serif (New York) is used for large display headings only,
 /// echoing the wordmark without ever replacing it.
+/// Roboto, used only for headings (screen titles, walk titles, profile names). Body text, buttons and form fields stay SF Pro,
+/// and the landing/onboarding display face stays Slash. PostScript names come from the font files' own name tables.
+/// `relativeTo` makes every size scale with Dynamic Type; if a face ever fails to register, SwiftUI falls back to the system font.
+enum AlongRoboto {
+    static let regular = "Roboto-Regular", medium = "Roboto-Medium", bold = "Roboto-Bold"
+    static func bold(_ size: CGFloat, relativeTo style: Font.TextStyle) -> Font { .custom(bold, size: size, relativeTo: style) }
+    static func medium(_ size: CGFloat, relativeTo style: Font.TextStyle) -> Font { .custom(medium, size: size, relativeTo: style) }
+}
+
 enum AlongFont {
+    // Roboto headings
+    /// Main screen titles: "Chat", "Walks".
+    static let screenHeading = AlongRoboto.bold(38, relativeTo: .largeTitle)
+    /// Sections: "Upcoming Walks", "Recent Walks".
+    static let sectionHeading = AlongRoboto.bold(22, relativeTo: .title2)
+    /// A person's name at the top of a profile.
+    static let profileName = AlongRoboto.bold(30, relativeTo: .title)
+    /// A walk's title on its detail page and on the map card.
+    static let walkDetailTitle = AlongRoboto.bold(30, relativeTo: .title)
+    /// The featured walk on the Walks screen.
+    static let walkFeaturedTitle = AlongRoboto.bold(26, relativeTo: .title2)
+    /// A walk's title inside a list card.
+    static let walkCardTitle = AlongRoboto.bold(18, relativeTo: .headline)
+    /// Headings on walking screens (Create Walk, live walk, history).
+    static let walkScreenHeading = AlongRoboto.bold(28, relativeTo: .title)
+    /// Smaller headings.
+    static let smallHeading = AlongRoboto.medium(17, relativeTo: .headline)
+
+
     static let display = Font.system(.largeTitle, design: .serif, weight: .semibold)
     static let title = Font.system(.title2, design: .serif, weight: .semibold)
     static let screenTitle = Font.system(.largeTitle, design: .serif, weight: .semibold)

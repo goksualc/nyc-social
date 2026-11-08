@@ -1,34 +1,59 @@
 import SwiftUI
+import Observation
 
-/// Email + password: "Welcome back." (sign in) and "Join Along." (sign up) on one screen.
+/// The text typed into the email / sign-up form.
+///
+/// It is its own `@Observable` object, and each field reads only its own property. That way a keystroke re-renders the one
+/// field being typed in (and the Sign In button's enabled state) instead of the whole screen — heading, scroll view, every
+/// field and the footer — which is what made typing stutter when all four strings were `@State` on the parent view.
+@MainActor @Observable
+final class AuthFormModel {
+    var name = ""
+    var email = ""
+    var password = ""
+    var confirm = ""
+
+    func isFilled(signUp: Bool) -> Bool {
+        let base = !email.isEmpty && !password.isEmpty
+        return signUp ? base && !name.isEmpty && !confirm.isEmpty : base
+    }
+}
+
+/// Email + password: "Welcome back." (sign in) and "Come along." (sign up) on one screen.
 struct EmailAuthView: View {
     @Environment(AppSession.self) private var session
-    @State private var mode: Mode = .signIn
-    @State private var name = ""
-    @State private var email = ""
-    @State private var password = ""
-    @State private var confirm = ""
+    @State private var mode: Mode
+    @State private var form: AuthFormModel
     @State private var localError: String?
 
     enum Mode { case signIn, signUp }
 
-    private var filled: Bool {
-        let base = !email.isEmpty && !password.isEmpty
-        return mode == .signIn ? base : base && !name.isEmpty && !confirm.isEmpty
+    #if DEBUG
+    /// How many times this screen's own body ran. Typing must NOT increase it (see TypingPerformanceTests).
+    nonisolated(unsafe) static var bodyEvaluations = 0
+    #endif
+
+    init(initialMode: Mode = .signIn, form: AuthFormModel? = nil) {
+        _mode = State(initialValue: initialMode)
+        _form = State(initialValue: form ?? AuthFormModel())
     }
 
     var body: some View {
-        AuthScaffold(title: mode == .signIn ? "Welcome back." : "Join Along.") {
+        #if DEBUG
+        let _ = { Self.bodyEvaluations += 1 }()
+        #endif
+        AuthScaffold(title: mode == .signIn ? "Welcome back." : "Come along.",
+                     subtitle: mode == .signIn ? "Good to have you along." : "Your next NYC walk starts here.") {
             VStack(alignment: .leading, spacing: AlongSpacing.md) {
                 if mode == .signUp {
-                    AuthField(label: "Full Name", text: $name, contentType: .name, capitalization: .words)
+                    FormField(form: form, field: \.name, label: "Full Name", contentType: .name, capitalization: .words)
                 }
-                AuthField(label: "Email address", text: $email, contentType: .emailAddress, keyboard: .emailAddress)
-                AuthField(label: "Password", text: $password, isSecure: true,
+                FormField(form: form, field: \.email, label: "Email address", contentType: .emailAddress, keyboard: .emailAddress)
+                FormField(form: form, field: \.password, label: "Password", isSecure: true,
                           contentType: mode == .signIn ? .password : .newPassword,
                           submitLabel: mode == .signIn ? .go : .next, onSubmit: { if mode == .signIn { submit() } })
                 if mode == .signUp {
-                    AuthField(label: "Confirm Password", text: $confirm, isSecure: true, contentType: .newPassword,
+                    FormField(form: form, field: \.confirm, label: "Confirm Password", isSecure: true, contentType: .newPassword,
                               submitLabel: .go, onSubmit: submit)
                     AuthMessage(text: "At least \(AuthValidation.minimumPasswordLength) characters.", isError: false)
                 } else {
@@ -42,11 +67,10 @@ struct EmailAuthView: View {
             }
         } footer: {
             VStack(spacing: AlongSpacing.xs) {
-                AlongButton(title: mode == .signIn ? "Sign In" : "Create Account", isLoading: session.isBusy, action: submit)
-                    .disabled(!filled || session.isBusy)
+                SubmitButton(form: form, signUp: mode == .signUp, action: submit)
                 Button {
                     alongWithAnimation(.alongQuick) { mode = mode == .signIn ? .signUp : .signIn }
-                    localError = nil; session.clearError(); password = ""; confirm = ""
+                    localError = nil; session.clearError(); form.password = ""; form.confirm = ""
                 } label: {
                     (Text(mode == .signIn ? "New to Along? " : "Already have an account? ")
                         .foregroundStyle(AlongColor.textTertiary)
@@ -63,19 +87,52 @@ struct EmailAuthView: View {
     }
 
     private func submit() {
-        guard filled, !session.isBusy else { return }
+        guard form.isFilled(signUp: mode == .signUp), !session.isBusy else { return }
         localError = nil
         session.clearError()
-        guard AuthValidation.isValidEmail(email) else { localError = "Enter a valid email address."; return }
+        guard AuthValidation.isValidEmail(form.email) else { localError = "Enter a valid email address."; return }
         switch mode {
         case .signIn:
-            Task { await session.signInWithEmail(email: email, password: password) }
+            Task { await session.signInWithEmail(email: form.email, password: form.password) }
         case .signUp:
-            guard AuthValidation.isValidName(name) else { localError = "Enter your name."; return }
-            if let problem = AuthValidation.passwordProblem(password) { localError = problem; return }
-            guard password == confirm else { localError = "Passwords don't match."; return }
-            Task { await session.signUpWithEmail(fullName: name, email: email, password: password) }
+            guard AuthValidation.isValidName(form.name) else { localError = "Enter your name."; return }
+            if let problem = AuthValidation.passwordProblem(form.password) { localError = problem; return }
+            guard form.password == form.confirm else { localError = "Passwords don't match."; return }
+            Task { await session.signUpWithEmail(fullName: form.name, email: form.email, password: form.password) }
         }
+    }
+}
+
+/// One text field bound to one property of the form model. The binding is created and read *here*, so typing re-renders
+/// only this small view, never the screen that contains it.
+private struct FormField: View {
+    let form: AuthFormModel
+    let field: ReferenceWritableKeyPath<AuthFormModel, String>
+    let label: String
+    var isSecure = false
+    var contentType: UITextContentType?
+    var keyboard: UIKeyboardType = .default
+    var capitalization: TextInputAutocapitalization = .never
+    var submitLabel: SubmitLabel = .next
+    var onSubmit: () -> Void = {}
+
+    var body: some View {
+        AuthField(label: label, text: Binding(get: { form[keyPath: field] }, set: { form[keyPath: field] = $0 }),
+                  isSecure: isSecure, contentType: contentType, keyboard: keyboard, capitalization: capitalization,
+                  submitLabel: submitLabel, onSubmit: onSubmit)
+    }
+}
+
+/// The main button. It alone reads which fields are filled, so only it re-renders (cheaply) as the person types.
+private struct SubmitButton: View {
+    let form: AuthFormModel
+    let signUp: Bool
+    let action: () -> Void
+    @Environment(AppSession.self) private var session
+
+    var body: some View {
+        AlongButton(title: signUp ? "Create Account" : "Sign In", isLoading: session.isBusy, action: action)
+            .disabled(!form.isFilled(signUp: signUp) || session.isBusy)
     }
 }
 

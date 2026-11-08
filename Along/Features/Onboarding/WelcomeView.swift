@@ -14,43 +14,11 @@ struct WelcomeView: View {
         }
     }()
 
-    enum Step: Hashable { case eligibility, signIn, email, forgot }
+    enum Step: Hashable { case eligibility, signIn, email, signUp, forgot }
 
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(alignment: .leading, spacing: 0) {
-                AlongLogo(variant: .navy, width: 150)
-                    .padding(.top, AlongSpacing.xxl)
-
-                Spacer()
-
-                VStack(alignment: .leading, spacing: AlongSpacing.md) {
-                    Text("Good company, wherever you're headed.")
-                        .font(.system(size: 40, weight: .semibold, design: .serif))
-                        .foregroundStyle(AlongColor.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .minimumScaleFactor(0.8)
-                    Text("Find someone to walk or work alongside you.")
-                        .font(.system(.title3))
-                        .foregroundStyle(AlongColor.textTertiary)
-                    if let notice = session.notice {
-                        Text(notice).font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
-                    }
-                }
-
-                Spacer()
-
-                VStack(spacing: AlongSpacing.xs) {
-                    AlongButton(title: "Get Started") { path.append(.eligibility) }
-                    // Existing members skip the explainer; their 18+ confirmation is already on the server.
-                    AlongButton(title: "I already have an account", style: .ghost) {
-                        if session.isLive { path.append(.signIn) } else { Task { await session.signInDemo() } }
-                    }
-                }
-                .padding(.bottom, AlongSpacing.md)
-            }
-            .padding(.horizontal, AlongSpacing.gutter + 4)
-            .alongScreenBackground()
+            landing
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Step.self) { step in
                 switch step {
@@ -61,10 +29,65 @@ struct WelcomeView: View {
                     }
                 case .signIn: SignInView()
                 case .email: EmailAuthView()
+                case .signUp: EmailAuthView(initialMode: .signUp)
                 case .forgot: ForgotPasswordView()
                 }
             }
         }
+    }
+}
+
+extension WelcomeView {
+    /// The opening screen: logo, an Iznik-tile arch, the headline, and the two entry buttons. Everything between the logo and
+    /// the buttons flexes, so it fits the smallest iPhone as well as a Pro Max without overlapping.
+    @ViewBuilder var landing: some View {
+        VStack(spacing: 0) {
+            AlongLogo(variant: .navy, width: 136)
+                .fixedSize(horizontal: false, vertical: true)       // never squeezed by the artwork below
+                .layoutPriority(3)
+                .padding(.top, AlongSpacing.sm)
+
+            Spacer(minLength: AlongSpacing.sm)
+
+            IznikArch()
+                .aspectRatio(0.76, contentMode: .fit)
+                .frame(maxWidth: 260, maxHeight: .infinity)
+                .layoutPriority(1)
+
+            Spacer(minLength: AlongSpacing.sm)
+
+            VStack(spacing: AlongSpacing.sm) {
+                AlongDisplayHeading("Walk a few blocks.\nOverthink together.",
+                                    size: 32, alignment: .center)
+                Text("Find someone nearby to walk with and talk about whatever's on your mind.")
+                    .font(.system(.callout))
+                    .foregroundStyle(AlongColor.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 320)
+                if let notice = session.notice {
+                    Text(notice).font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary).multilineTextAlignment(.center)
+                }
+            }
+
+            Spacer(minLength: AlongSpacing.md)
+
+            VStack(spacing: AlongSpacing.xs) {
+                AlongButton(title: "Get Started") { path.append(.eligibility) }
+                // Existing members skip the explainer; their 18+ confirmation is already on the server.
+                AlongButton(title: "I already have an account", style: .ghost) {
+                    if session.isLive { path.append(.signIn) } else { Task { await session.signInDemo() } }
+                }
+            }
+            .padding(.bottom, AlongSpacing.xs)
+        }
+        .padding(.horizontal, AlongSpacing.gutter + 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AlongColor.offWhite.ignoresSafeArea())
+        .overlay(alignment: .topLeading) { IznikCorner().frame(width: 96).allowsHitTesting(false) }
+        .overlay(alignment: .topTrailing) { IznikCorner(mirrored: true).frame(width: 96).allowsHitTesting(false) }
+        .safeAreaInset(edge: .bottom, spacing: 0) { IznikBand() }       // sits above the home indicator, below the buttons
     }
 }
 
@@ -75,9 +98,7 @@ struct EligibilityView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AlongSpacing.lg) {
-            Text("Before you join")
-                .font(AlongFont.screenTitle)
-                .foregroundStyle(AlongColor.textPrimary)
+            AlongDisplayHeading("Before you join.", size: 44)
                 .padding(.top, AlongSpacing.lg)
 
             VStack(alignment: .leading, spacing: AlongSpacing.md) {
@@ -124,109 +145,6 @@ struct EligibilityView: View {
                 .foregroundStyle(AlongColor.navy)
                 .frame(width: 28)
             Text(text).font(AlongFont.body).foregroundStyle(AlongColor.textPrimary)
-        }
-    }
-}
-
-/// First-run basics after the first sign-in: name, optional bio, interests, and the 18+ confirmation.
-struct CompleteProfileView: View {
-    @Environment(AppSession.self) private var session
-    @AppStorage("along.ageConfirmedLocally") private var ageConfirmedLocally = false
-    @State private var name = ""
-    @State private var bio = ""
-    @State private var interests: Set<Interest> = []
-    @State private var purposes: Set<AlongPurpose> = [.walkingBuddies, .coworkingCompany]
-    @State private var confirmedAge = false
-    @State private var didPrefill = false
-
-    private var canContinue: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && confirmedAge }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: AlongSpacing.lg) {
-                Text("A little about you")
-                    .font(AlongFont.screenTitle)
-                    .foregroundStyle(AlongColor.textPrimary)
-                    .padding(.top, AlongSpacing.lg)
-
-                AlongTextField(label: "First name", text: $name, prompt: "What should people call you?", limit: 24)
-                AlongTextField(label: "Bio", text: $bio, prompt: "Optional", axis: .vertical, lines: 1...3, limit: 120)
-
-                VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                    AlongSectionLabel("Interests")
-                    FlowLayout(spacing: 8) {
-                        ForEach(Interest.allCases) { interest in
-                            Button {
-                                Haptics.selection()
-                                if interests.contains(interest) { interests.remove(interest) } else { interests.insert(interest) }
-                            } label: {
-                                AlongChip(title: interest.rawValue, isSelected: interests.contains(interest)).frame(minHeight: AlongSize.minTouch)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                    AlongSectionLabel("Along for")
-                    FlowLayout(spacing: 8) {
-                        ForEach(AlongPurpose.allCases) { purpose in
-                            Button {
-                                Haptics.selection()
-                                if purposes.contains(purpose) { if purposes.count > 1 { purposes.remove(purpose) } } else { purposes.insert(purpose) }
-                            } label: {
-                                AlongChip(title: purpose.rawValue, isSelected: purposes.contains(purpose),
-                                          symbol: purpose == .walkingBuddies ? "figure.walk" : "laptopcomputer")
-                                    .frame(minHeight: AlongSize.minTouch)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                Button {
-                    Haptics.selection()
-                    confirmedAge.toggle()
-                } label: {
-                    HStack(spacing: AlongSpacing.sm) {
-                        Image(systemName: confirmedAge ? "checkmark.square.fill" : "square")
-                            .font(.system(size: 24))
-                            .foregroundStyle(confirmedAge ? AlongColor.navy : AlongColor.textSecondary)
-                        Text("I confirm that I'm 18 or older.").font(AlongFont.body).foregroundStyle(AlongColor.textPrimary)
-                        Spacer(minLength: 0)
-                    }
-                    .frame(minHeight: AlongSize.minTouch)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                if let error = session.errorMessage {
-                    Text(error).font(AlongFont.subhead).foregroundStyle(AlongColor.destructive)
-                }
-            }
-            .padding(.horizontal, AlongSpacing.gutter + 4)
-            .padding(.bottom, AlongSpacing.xl)
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .alongScreenBackground()
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            AlongButton(title: "Continue", isLoading: session.isBusy) {
-                Task {
-                    await session.completeProfile(ProfileDraft(
-                        displayName: name.trimmingCharacters(in: .whitespaces), bio: bio.trimmingCharacters(in: .whitespacesAndNewlines),
-                        interests: Interest.allCases.filter(interests.contains), alongFor: purposes, confirmAge: confirmedAge))
-                }
-            }
-            .disabled(!canContinue)
-            .padding(.horizontal, AlongSpacing.gutter + 4)
-            .padding(.vertical, AlongSpacing.sm)
-            .background(AlongColor.offWhite.overlay(alignment: .top) { AlongDivider() }.ignoresSafeArea(edges: .bottom))
-        }
-        .onAppear {
-            guard !didPrefill else { return }
-            didPrefill = true
-            name = session.suggestedName
-            confirmedAge = ageConfirmedLocally
         }
     }
 }

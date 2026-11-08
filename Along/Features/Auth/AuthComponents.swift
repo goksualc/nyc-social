@@ -66,8 +66,7 @@ struct AuthScaffold<Content: View, Footer: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: AlongSpacing.lg) {
                 VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                    Text(title).font(AlongFont.screenTitle).foregroundStyle(AlongColor.textPrimary)
-                        .accessibilityAddTraits(.isHeader)
+                    AlongDisplayHeading(title, size: 44)
                     if let subtitle {
                         Text(subtitle).font(AlongFont.body).foregroundStyle(AlongColor.textTertiary)
                     }

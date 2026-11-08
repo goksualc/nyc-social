@@ -27,12 +27,6 @@ final class SupabaseAuthService: AuthService, @unchecked Sendable {
         }
     }
 
-    func signInWithApple(idToken: String, nonce: String) async throws -> AuthSession {
-        let session = try await client.auth.signInWithIdToken(
-            credentials: OpenIDConnectCredentials(provider: .apple, idToken: idToken, nonce: nonce))
-        return map(session)
-    }
-
     func signInWithGoogle() async throws -> AuthSession {
         let session = try await client.auth.signInWithOAuth(
             provider: .google, redirectTo: AuthRedirect.url(.oauth),
@@ -112,16 +106,32 @@ final class SupabaseAuthService: AuthService, @unchecked Sendable {
 // MARK: - Profile
 
 struct MyProfileRow: Decodable {
-    var id: String
-    var username: String?
-    var fullName: String?
-    var displayName: String?
-    var bio: String?
-    var avatarUrl: String?
-    var interests: [String]?
-    var lookingFor: [String]?
-    var visibility: String?
-    var ageConfirmedAt: Date?
+    var base: ProfileRow
+    var birthday: String?
+    var showAge: Bool?
+    var showWalkStats: Bool?
+    var onboardingCompleted: Bool?
+
+    private enum Extra: String, CodingKey { case birthday, showAge, showWalkStats, onboardingCompleted }
+    init(from decoder: Decoder) throws {
+        base = try ProfileRow(from: decoder)
+        let c = try decoder.container(keyedBy: Extra.self)
+        birthday = try c.decodeIfPresent(String.self, forKey: .birthday)
+        showAge = try c.decodeIfPresent(Bool.self, forKey: .showAge)
+        showWalkStats = try c.decodeIfPresent(Bool.self, forKey: .showWalkStats)
+        onboardingCompleted = try c.decodeIfPresent(Bool.self, forKey: .onboardingCompleted)
+    }
+}
+
+enum ProfileDates {
+    static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 }
 
 final class SupabaseProfileService: ProfileService, @unchecked Sendable {
@@ -137,19 +147,30 @@ final class SupabaseProfileService: ProfileService, @unchecked Sendable {
             rows = try await client.rpc("get_my_profile").execute().value
         }
         guard let r = rows.first else { throw AlongError.notFound }
-        let base = ProfileRow(id: r.id, username: r.username, fullName: r.fullName, displayName: r.displayName, bio: r.bio,
-                              avatarUrl: r.avatarUrl, interests: r.interests, lookingFor: r.lookingFor,
-                              visibility: r.visibility, ageConfirmedAt: r.ageConfirmedAt)
-        return MyProfile(user: base.user, fullName: r.fullName,
-                         hasDisplayName: !(r.displayName ?? "").isEmpty, ageConfirmed: r.ageConfirmedAt != nil,
-                         visibility: ProfileVisibility(dbValue: r.visibility ?? "everyone"))
+        var user = r.base.user
+        let birthday = r.birthday.flatMap { ProfileDates.formatter.date(from: $0) }
+        if let birthday { user.age = Calendar.current.dateComponents([.year], from: birthday, to: .now).year }
+        return MyProfile(user: user, fullName: r.base.fullName,
+                         hasDisplayName: !(r.base.displayName ?? "").isEmpty, ageConfirmed: r.base.ageConfirmedAt != nil,
+                         // Servers that predate migration 8 have no onboarding flag: don't send existing members back through it.
+                         onboardingCompleted: r.onboardingCompleted ?? true, birthday: birthday,
+                         visibility: ProfileVisibility(dbValue: r.base.visibility ?? "everyone"),
+                         showAge: r.showAge ?? false, showWalkStats: r.showWalkStats ?? false)
     }
 
     func completeProfile(_ draft: ProfileDraft, fullName: String?) async throws {
         try await client.rpc("complete_profile", params: CompleteProfileParams(
-            pDisplayName: draft.displayName, pBio: draft.bio, pInterests: draft.interests.map(\.dbValue),
-            pLookingFor: draft.alongFor.map(\.dbValue), pConfirmAge: draft.confirmAge)).execute()
-        if let fullName, !fullName.isEmpty, let uid = manager.currentUserID {
+            pDisplayName: draft.displayName, pBio: draft.bio, pInterests: [],
+            pLookingFor: ["walking_buddies"], pConfirmAge: draft.confirmAge)).execute()
+        let uid = try manager.requireUserID()
+        let extras = OnboardingUpdate(
+            instagramUsername: draft.instagram, xUsername: draft.xHandle, hobbies: draft.hobbies,
+            preferredPace: draft.pacePreference?.dbValue, preferredDuration: draft.preferredDuration,
+            favoriteNeighborhoods: draft.favoriteNeighborhoods,
+            birthday: draft.birthday.map { ProfileDates.formatter.string(from: $0) })
+        try await client.from("profiles").update(extras, returning: .minimal).eq("id", value: uid).execute()
+        try await client.rpc("complete_onboarding").execute()
+        if let fullName, !fullName.isEmpty {
             // Best effort: keep Apple's one-time name server-side (private column, never shown to others).
             _ = try? await client.from("profiles").update(["full_name": fullName], returning: .minimal).eq("id", value: uid).execute()
         }
@@ -159,10 +180,20 @@ final class SupabaseProfileService: ProfileService, @unchecked Sendable {
         let uid = try manager.requireUserID()
         let name = String(user.firstName.trimmingCharacters(in: .whitespaces).prefix(24))
         guard !name.isEmpty else { throw AlongError.profileIncomplete }
-        let update = ProfileUpdate(displayName: name, bio: String(user.bio.prefix(160)),
-                                   interests: user.interests.map(\.dbValue),
-                                   lookingFor: user.alongFor.map(\.dbValue), avatarUrl: user.avatarPath,
-                                   visibility: nil)
+        func clean(_ s: String?, _ limit: Int) -> String? {
+            let t = (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : String(t.prefix(limit))
+        }
+        let update = ProfileUpdate(
+            displayName: name, bio: String(user.bio.prefix(160)), hobbies: Array(user.hobbies.prefix(HobbyCatalog.maxSelected)),
+            instagramUsername: user.instagram.flatMap { SocialNetwork.instagram.username(from: $0) },
+            xUsername: user.xHandle.flatMap { SocialNetwork.x.username(from: $0) },
+            occupation: clean(user.occupation, 60), university: clean(user.university, 80),
+            languages: Array(user.languages.prefix(Languages.maxSelected)),
+            favoriteNeighborhoods: Array(user.favoriteNeighborhoods.prefix(Neighborhoods.maxSelected)),
+            preferredPace: user.pacePreference?.dbValue, preferredDuration: user.preferredDuration,
+            discussionTopics: user.discussionTopics.map(\.dbValue),
+            conversationCustom: Array(user.conversationCustom.prefix(3)), visibility: nil)
         // `.minimal`: the default asks for the full row back, which would hit the column grants that hide private columns.
         try await client.from("profiles").update(update, returning: .minimal).eq("id", value: uid).execute()
         var saved = user
@@ -170,11 +201,25 @@ final class SupabaseProfileService: ProfileService, @unchecked Sendable {
         return saved
     }
 
+    func updateAvatarPath(_ path: String?) async throws {
+        let uid = try manager.requireUserID()
+        // `.minimal`: the default asks for the full row back, which would hit the column grants that hide private columns.
+        try await client.from("profiles").update(AvatarUpdate(avatarUrl: path), returning: .minimal).eq("id", value: uid).execute()
+    }
+
     func updateSettings(_ settings: UserSettings) async throws {
         let uid = try manager.requireUserID()
         local.save(settings, for: uid)
-        struct Vis: Encodable { var visibility: String }
-        try await client.from("profiles").update(Vis(visibility: settings.profileVisibility.dbValue), returning: .minimal).eq("id", value: uid).execute()
+        struct Prefs: Encodable { var visibility: String; var showAge: Bool; var showWalkStats: Bool }
+        do {
+            try await client.from("profiles").update(Prefs(visibility: settings.profileVisibility.dbValue, showAge: settings.showAge,
+                                                           showWalkStats: settings.showWalkStats), returning: .minimal)
+                .eq("id", value: uid).execute()
+        } catch {
+            // Servers that predate migration 8: keep the visibility change working.
+            struct Vis: Encodable { var visibility: String }
+            try await client.from("profiles").update(Vis(visibility: settings.profileVisibility.dbValue), returning: .minimal).eq("id", value: uid).execute()
+        }
     }
 }
 
@@ -191,15 +236,29 @@ final class SupabaseActivityService: ActivityService, @unchecked Sendable {
     func discover(_ q: DiscoveryQuery) async throws -> DiscoveryPage {
         let rows: [ActivityCardRow] = try await client.rpc("discover_activities", params: DiscoverParams(
             pMinLng: q.minLng, pMinLat: q.minLat, pMaxLng: q.maxLng, pMaxLat: q.maxLat,
-            pType: q.kind?.rawValue, pFrom: q.from, pTo: q.to, pLimit: q.limit + 1, pOffset: q.offset)).execute().value
+            pType: "walk", pFrom: q.from, pTo: q.to, pLimit: q.limit + 1, pOffset: q.offset)).execute().value
         return page(from: rows, limit: q.limit)
     }
 
-    func nearby(to center: Coordinate, radiusMeters: Double, kind: ActivityKind?, limit: Int) async throws -> DiscoveryPage {
+    func nearby(to center: Coordinate, radiusMeters: Double, limit: Int) async throws -> DiscoveryPage {
         let rows: [ActivityCardRow] = try await client.rpc("nearby_activities", params: NearbyParams(
             pLng: center.longitude, pLat: center.latitude, pRadiusM: radiusMeters,
-            pType: kind?.rawValue, pLimit: limit + 1)).execute().value
+            pType: "walk", pLimit: limit + 1)).execute().value
         return page(from: rows, limit: limit)
+    }
+
+    func searchAlongRoute(_ q: RouteSearchQuery) async throws -> [RouteMatch] {
+        // PostGIS does all the matching; the device only sends the route (thinned) and shows what comes back.
+        let rows: [RouteMatchRow] = try await client.rpc("search_walks_along_route", params: RouteSearchParams(
+            pRoute: Self.thin(q.route, to: 300).map { [$0.longitude, $0.latitude] }, pCorridorM: q.corridorMeters,
+            pFrom: q.from, pTo: q.to, pWhen: nil, pLimit: q.limit)).execute().value
+        return rows.map { $0.match() }
+    }
+
+    private static func thin(_ c: [Coordinate], to n: Int) -> [Coordinate] {
+        guard c.count > n, n >= 2 else { return c }
+        let step = Double(c.count - 1) / Double(n - 1)
+        return (0..<n).map { c[min(c.count - 1, Int((Double($0) * step).rounded()))] }
     }
 
     /// Asks for one extra row so `hasMore` is exact without a count query.
@@ -209,24 +268,17 @@ final class SupabaseActivityService: ActivityService, @unchecked Sendable {
     }
 
     func createActivity(_ d: ActivityDraft) async throws -> AlongSnapshot {
-        switch d.details {
-        case .walk(let w):
-            let route = d.routeCoordinates.count >= 2 ? d.routeCoordinates.map { [$0.longitude, $0.latitude] } : nil
-            let _: String = try await client.rpc("create_walk", params: CreateWalkParams(
+        let w = d.walk
+        let route = d.routeCoordinates.count >= 2 ? d.routeCoordinates.map { [$0.longitude, $0.latitude] } : nil
+        let _: String = try await client.rpc("create_walk", params: CreateWalkParams(
                 pTitle: d.title, pDescription: d.note, pStartTime: d.startDate, pEndTime: d.endDate,
-                pMaxParticipants: d.capacity, pVisibility: d.visibility.rawValue.lowercased(), pPace: w.pace.dbValue,
+                pMaxParticipants: d.capacity, pVisibility: "public", pPace: w.pace.dbValue,   // a walk is always on the map; anonymity is its own flag
                 pStartLabel: w.from.publicLabel, pEndLabel: w.to.publicLabel,
                 pStartLng: w.from.coordinate.longitude, pStartLat: w.from.coordinate.latitude,
                 pEndLng: w.to.coordinate.longitude, pEndLat: w.to.coordinate.latitude,
-                pRoute: route, pMeetingDetails: d.meetingDetails)).execute().value
-        case .cowork(let c):
-            let _: String = try await client.rpc("create_cowork", params: CreateCoworkParams(
-                pTitle: d.title, pDescription: d.note, pStartTime: d.startDate, pEndTime: d.endDate,
-                pMaxParticipants: d.capacity, pVisibility: d.visibility.rawValue.lowercased(), pWorkStyle: c.style.dbValue,
-                pCafeName: c.venue.name, pAddress: c.venue.address ?? "",
-                pLng: c.venue.coordinate.longitude, pLat: c.venue.coordinate.latitude,
-                pPlaceIdentifier: "", pMeetingDetails: d.meetingDetails)).execute().value
-        }
+                pRoute: route, pMeetingDetails: d.meetingDetails,
+                pAnonymousHost: d.anonymousHost, pHostInterests: d.anonymousHost ? Array(d.hostInterests.prefix(4)) : [],
+                pMindPrompt: String(d.mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140)))).execute().value
         return try await loader.load()
     }
 
@@ -323,7 +375,9 @@ final class SupabaseStorageService: StorageService, @unchecked Sendable {
     func uploadAvatar(_ jpeg: Data) async throws -> String {
         guard jpeg.count <= 2_000_000 else { throw AlongError.imageTooLarge }
         let uid = try manager.requireUserID()
-        let path = "\(uid)/avatar-\(Int(Date().timeIntervalSince1970)).jpg"
+        // avatars/<user id>/avatar-<unix milliseconds>.jpg — unique per upload (two quick uploads can't collide) and matching the
+        // storage policy's `avatar(-digits)?.jpg` pattern, which only allows writes inside the caller's own folder.
+        let path = AvatarStoragePath.make(userID: uid)
         _ = try await bucket.upload(path, data: jpeg, options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false))
         return path
     }
@@ -376,24 +430,29 @@ final class SupabaseBackend: AlongBackend, @unchecked Sendable {
     private let messaging: SupabaseMessagingService
     private let storage: SupabaseStorageService
     private let safety: SupabaseSafetyService
+    private let walks: SupabaseWalkSessionService
+    private let walkHistory: SupabaseWalkHistoryService
 
     init(manager: SupabaseManager) {
         self.manager = manager
         profiles = .init(manager: manager); activities = .init(manager: manager); requests = .init(manager: manager)
         messaging = .init(manager: manager); storage = .init(manager: manager); safety = .init(manager: manager)
+        walks = .init(manager: manager); walkHistory = .init(manager: manager)
     }
 
     // ProfileService
     func loadMyProfile() async throws -> MyProfile { try await profiles.loadMyProfile() }
     func completeProfile(_ draft: ProfileDraft, fullName: String?) async throws { try await profiles.completeProfile(draft, fullName: fullName) }
     func updateProfile(_ user: User) async throws -> User { try await profiles.updateProfile(user) }
+    func updateAvatarPath(_ path: String?) async throws { try await profiles.updateAvatarPath(path) }
     func updateSettings(_ settings: UserSettings) async throws { try await profiles.updateSettings(settings) }
     // ActivityService
     func loadSnapshot() async throws -> AlongSnapshot { try await activities.loadSnapshot() }
     func discover(_ query: DiscoveryQuery) async throws -> DiscoveryPage { try await activities.discover(query) }
-    func nearby(to c: Coordinate, radiusMeters: Double, kind: ActivityKind?, limit: Int) async throws -> DiscoveryPage {
-        try await activities.nearby(to: c, radiusMeters: radiusMeters, kind: kind, limit: limit)
+    func nearby(to c: Coordinate, radiusMeters: Double, limit: Int) async throws -> DiscoveryPage {
+        try await activities.nearby(to: c, radiusMeters: radiusMeters, limit: limit)
     }
+    func searchAlongRoute(_ query: RouteSearchQuery) async throws -> [RouteMatch] { try await activities.searchAlongRoute(query) }
     func createActivity(_ draft: ActivityDraft) async throws -> AlongSnapshot { try await activities.createActivity(draft) }
     func updateActivity(_ edit: ActivityEdit) async throws -> AlongSnapshot { try await activities.updateActivity(edit) }
     func cancelActivity(id: ID) async throws -> AlongSnapshot { try await activities.cancelActivity(id: id) }
@@ -416,4 +475,18 @@ final class SupabaseBackend: AlongBackend, @unchecked Sendable {
     func block(userID: ID) async throws -> AlongSnapshot { try await safety.block(userID: userID) }
     func unblock(userID: ID) async throws -> AlongSnapshot { try await safety.unblock(userID: userID) }
     func report(_ target: ReportTarget, reason: ReportReason) async throws { try await safety.report(target, reason: reason) }
+    // WalkSessionService
+    func openSession(activityID: ID) async throws -> WalkSession { try await walks.openSession(activityID: activityID) }
+    func session(activityID: ID) async throws -> WalkSession? { try await walks.session(activityID: activityID) }
+    func setReady(sessionID: ID) async throws -> WalkSession { try await walks.setReady(sessionID: sessionID) }
+    func setSharing(sessionID: ID, enabled: Bool) async throws -> WalkSession { try await walks.setSharing(sessionID: sessionID, enabled: enabled) }
+    func finish(sessionID: ID, distanceMeters: Int?) async throws -> WalkSession { try await walks.finish(sessionID: sessionID, distanceMeters: distanceMeters) }
+    func endEarly(sessionID: ID) async throws -> WalkSession { try await walks.endEarly(sessionID: sessionID) }
+    // WalkHistoryService
+    func history() async throws -> [CompletedWalk] { try await walkHistory.history() }
+    func stats() async throws -> WalkStats { try await walkHistory.stats() }
+    func publicStats(userID: ID) async throws -> WalkStats? { try await walkHistory.publicStats(userID: userID) }
+    func setMemoryPrefs(sessionID: ID, showOnProfile: Bool?, revealPartner: Bool?) async throws {
+        try await walkHistory.setMemoryPrefs(sessionID: sessionID, showOnProfile: showOnProfile, revealPartner: revealPartner)
+    }
 }

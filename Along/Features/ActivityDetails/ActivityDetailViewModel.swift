@@ -41,7 +41,8 @@ final class ActivityDetailViewModel {
     // MARK: Route
 
     func loadRoute() async {
-        guard let activity, let walk = activity.walk else { return }
+        guard let activity else { return }
+        let walk = activity.walk
         // The host's saved route (shared with accepted guests) beats re-asking MapKit.
         if activity.routeCoordinates.count >= 2 {
             let coords = activity.routeCoordinates

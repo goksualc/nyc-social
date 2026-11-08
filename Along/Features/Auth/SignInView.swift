@@ -1,48 +1,33 @@
 import SwiftUI
-import AuthenticationServices
-import CryptoKit
 
-/// The single sign-in screen: Apple, Google or email. All three end in the same Supabase identity.
+/// The single sign-in screen: Google or email. Both end in the same Supabase identity.
 struct SignInView: View {
     @Environment(AppSession.self) private var session
-    @State private var rawNonce = ""
     @State private var active: Provider?
 
-    enum Provider { case apple, google }
+    enum Provider { case google }
 
     private var disabled: Bool { session.isBusy || !session.network.isOnline }
 
     var body: some View {
         VStack(spacing: 0) {
-            AlongLogo(variant: .navy, width: 150)
-                .padding(.top, AlongSpacing.xxl)
-            Text("Good company, wherever you're headed.")
-                .font(.system(size: 30, weight: .semibold, design: .serif))
-                .foregroundStyle(AlongColor.textPrimary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, AlongSpacing.xl)
-                .padding(.horizontal, AlongSpacing.md)
+            Spacer(minLength: AlongSpacing.lg)
+
+            VStack(spacing: AlongSpacing.md) {
+                AlongDisplayHeading("Your next NYC\nconversation\nstarts here.", size: 40, alignment: .center)
+                Text("Create your profile, find someone nearby,\nand take your thoughts for a walk.")
+                    .font(AlongFont.body)
+                    .foregroundStyle(AlongColor.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity)
 
             Spacer(minLength: AlongSpacing.xl)
 
             VStack(spacing: AlongSpacing.sm) {
                 if let error = session.errorMessage { AuthMessage(text: error) }
-
-                SignInWithAppleButton(.continue) { request in
-                    rawNonce = AppleNonce.random()
-                    request.requestedScopes = [.fullName, .email]
-                    request.nonce = AppleNonce.sha256(rawNonce)
-                    session.clearError()
-                    active = .apple
-                } onCompletion: { result in
-                    Task { await session.signInWithApple(result, rawNonce: rawNonce); active = nil }
-                }
-                .signInWithAppleButtonStyle(.black)
-                .frame(height: AlongSize.button)
-                .clipShape(RoundedRectangle(cornerRadius: AlongRadius.control, style: .continuous))
-                .overlay { if session.isBusy && active == .apple { ProgressView().tint(.white) } }
-                .disabled(disabled)
 
                 providerButton(background: AlongColor.white, foreground: AlongColor.textPrimary, border: AlongColor.border,
                                title: "Continue with Google", loading: session.isBusy && active == .google) {
@@ -53,10 +38,21 @@ struct SignInView: View {
                     Task { await session.signInWithGoogle(); active = nil }
                 }
 
-                NavigationLink(value: WelcomeView.Step.email) {
-                    label(background: AlongColor.navy, foreground: .white, border: nil, title: "Continue with Email", loading: false) {
+                // The primary action on this screen: create an account with email. (Google above also creates one.)
+                NavigationLink(value: WelcomeView.Step.signUp) {
+                    label(background: AlongColor.navy, foreground: .white, border: nil, title: "Create Account", loading: false) {
                         Image(systemName: "envelope").font(.system(size: 17, weight: .regular)).accessibilityHidden(true)
                     }
+                }
+                .buttonStyle(.plain)
+                .disabled(session.isBusy)
+                .simultaneousGesture(TapGesture().onEnded { session.clearError() })
+
+                NavigationLink(value: WelcomeView.Step.email) {
+                    (Text("Already have an account? ").foregroundStyle(AlongColor.textTertiary)
+                     + Text("Sign in").foregroundStyle(AlongColor.navy).fontWeight(.semibold))
+                        .font(AlongFont.subhead)
+                        .frame(maxWidth: .infinity, minHeight: AlongSize.minTouch)
                 }
                 .buttonStyle(.plain)
                 .disabled(session.isBusy)
@@ -106,6 +102,7 @@ struct LegalText: View {
             .foregroundStyle(AlongColor.textTertiary)
             .multilineTextAlignment(.center)
             .tint(AlongColor.navy)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity)
     }
 
@@ -122,18 +119,5 @@ struct LegalText: View {
         var s = AttributedString(name)
         if let url { s.link = url; s.underlineStyle = .single }
         return s
-    }
-}
-
-enum AppleNonce {
-    static func random(length: Int = 32) -> String {
-        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
-        var bytes = [UInt8](repeating: 0, count: length)
-        precondition(SecRandomCopyBytes(kSecRandomDefault, length, &bytes) == errSecSuccess)
-        return String(bytes.map { charset[Int($0) % charset.count] })
-    }
-
-    static func sha256(_ input: String) -> String {
-        SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

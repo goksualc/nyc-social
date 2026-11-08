@@ -12,7 +12,6 @@ final class DemoAuthService: AuthService, @unchecked Sendable {
     func restoreSession() async throws -> AuthSession? {
         defaults.bool(forKey: key) || LaunchOptions.current.skipOnboarding ? session : nil
     }
-    func signInWithApple(idToken: String, nonce: String) async throws -> AuthSession { throw AlongError.notConfigured }
     func signInWithGoogle() async throws -> AuthSession { throw AlongError.notConfigured }
     func signIn(email: String, password: String) async throws -> AuthSession { throw AlongError.notConfigured }
     func signUp(email: String, password: String, fullName: String) async throws -> SignUpOutcome { throw AlongError.notConfigured }

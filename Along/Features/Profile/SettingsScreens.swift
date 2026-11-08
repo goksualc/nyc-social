@@ -190,9 +190,9 @@ struct AboutView: View {
         SettingsPage(title: "About Along") {
             VStack(spacing: AlongSpacing.sm) {
                 AlongLogo(variant: .navy, width: 150)
-                Text("Good company, wherever you're headed.")
+                Text("New York walks better together.")
                     .font(.system(.title3, design: .serif)).foregroundStyle(AlongColor.textPrimary).multilineTextAlignment(.center)
-                Text("Version 0.2 · Manhattan").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                Text("Version 0.2 · New York City").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
                 Label(session.isLive ? "Connected to Along" : "Demo mode · local data only",
                       systemImage: session.isLive ? "checkmark.icloud" : "internaldrive")
                     .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)

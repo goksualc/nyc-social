@@ -1,19 +1,23 @@
 import Foundation
 
 enum AlongError: LocalizedError, Sendable, Equatable {
-    case outsideManhattan, startInPast, invalidTimes, sameLocation, invalidRoute
+    case outsideNYC, startInPast, invalidTimes, sameLocation, invalidRoute
     case notFound, notAllowed, blocked, chatClosed
     case activityFull, alreadyRequested, requestDeclined, activityClosed, capacityBelowAccepted
     case notAuthenticated, sessionExpired, profileIncomplete, ageRequired
     case offline, imageTooLarge, uploadFailed, notConfigured
     case rateLimited, cancelled, generic
+    // Walk sessions
+    case sessionRequiresTwo, noParticipant, sessionClosed
+    /// The database is missing something this version of the app needs (a migration hasn't been applied).
+    case backendOutOfDate
     // Authentication
     case invalidCredentials, emailNotConfirmed, weakPassword, samePassword, invalidLink, tooManyAttempts, providerUnavailable, signInFailed
 
     /// Maps the short codes raised by the database functions (`raise exception 'activity_full'`).
     init?(serverCode: String) {
         switch serverCode.trimmingCharacters(in: .whitespaces) {
-        case "outside_manhattan": self = .outsideManhattan
+        case "outside_manhattan", "outside_nyc": self = .outsideNYC
         case "start_in_past": self = .startInPast
         case "invalid_times", "too_far_ahead": self = .invalidTimes
         case "same_location": self = .sameLocation
@@ -31,13 +35,16 @@ enum AlongError: LocalizedError, Sendable, Equatable {
         case "profile_incomplete": self = .profileIncomplete
         case "age_required": self = .ageRequired
         case "rate_limited": self = .rateLimited
+        case "session_requires_two": self = .sessionRequiresTwo
+        case "no_participant": self = .noParticipant
+        case "session_closed": self = .sessionClosed
         default: return nil
         }
     }
 
     var errorDescription: String? {
         switch self {
-        case .outsideManhattan: "Along is only in Manhattan for now."
+        case .outsideNYC: "Along covers New York City. Pick a place in one of the five boroughs."
         case .startInPast: "Pick a time in the future."
         case .invalidTimes: "The end time needs to be after the start."
         case .sameLocation: "Start and destination can't be the same."
@@ -67,6 +74,10 @@ enum AlongError: LocalizedError, Sendable, Equatable {
         case .tooManyAttempts: "Too many attempts. Wait a minute and try again."
         case .providerUnavailable: "This sign-in option isn't available right now. Try another way."
         case .signInFailed: "Couldn't sign you in. Try again."
+        case .sessionRequiresTwo: "Live walks are for two people for now. Keep just one walking buddy accepted."
+        case .noParticipant: "Accept a walking buddy first."
+        case .sessionClosed: "This walk has already finished."
+        case .backendOutOfDate: "Along's server needs its latest update before this works. Apply the newest database migrations."
         case .cancelled: nil
         case .generic: "Something went wrong. Try again."
         }

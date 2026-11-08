@@ -17,7 +17,7 @@ struct AlongSnapshot: Sendable {
 /// What the create flow hands to the backend.
 struct ActivityDraft: Sendable {
     var title: String
-    var details: ActivityDetails
+    var walk: WalkInfo
     var startDate: Date
     var endDate: Date
     var visibility: Visibility
@@ -26,6 +26,11 @@ struct ActivityDraft: Sendable {
     var meetingDetails: String
     /// Walking route vertices (optional) so the server stores the real route, not a straight line.
     var routeCoordinates: [Coordinate] = []
+    /// Public walk, hidden organizer. (This is what the "Private" choice now means: the walk is always on the map.)
+    var anonymousHost = false
+    var hostInterests: [String] = []
+    /// "What's on your mind?" (optional).
+    var mindPrompt = ""
 }
 
 /// Fields a host may change after publishing. `nil` = unchanged. Locations can't be edited.
@@ -41,7 +46,6 @@ struct ActivityEdit: Sendable {
 /// A map-bounded, filtered, paginated discovery request.
 struct DiscoveryQuery: Sendable, Equatable {
     var minLat: Double, minLng: Double, maxLat: Double, maxLng: Double
-    var kind: ActivityKind?
     /// Plans overlapping [from, to]; `nil` = from now / open-ended.
     var from: Date?
     var to: Date?
@@ -61,22 +65,34 @@ struct AuthSession: Equatable, Sendable {
     var userID: ID
 }
 
-/// Lets the app decide whether first-run profile completion is needed.
+/// Lets the app decide whether first-run onboarding is needed.
 struct MyProfile: Sendable {
     var user: User
     var fullName: String?
     var hasDisplayName: Bool
     var ageConfirmed: Bool
+    var onboardingCompleted = true
+    var birthday: Date?
     var visibility: ProfileVisibility = .everyone
-    var isComplete: Bool { hasDisplayName && ageConfirmed }
+    var showAge = false
+    var showWalkStats = false
+    var isComplete: Bool { hasDisplayName && ageConfirmed && onboardingCompleted }
 }
 
+/// Everything the onboarding flow collects. Written in one go when the person reaches the end.
 struct ProfileDraft: Sendable {
     var displayName: String
     var bio: String
-    var interests: [Interest]
-    var alongFor: Set<AlongPurpose>
     var confirmAge: Bool
+    var birthday: Date?
+    var instagram: String?
+    var xHandle: String?
+    var hobbies: [String] = []
+    var pacePreference: PacePreference?
+    var preferredDuration: Int?
+    var favoriteNeighborhoods: [String] = []
+    /// Chosen during onboarding; uploaded right after the account opens (there is no store before that).
+    var avatarJPEG: Data?
 }
 
 enum ReportReason: String, CaseIterable, Sendable, Identifiable {

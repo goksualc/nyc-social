@@ -28,28 +28,17 @@ struct EditActivitySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AlongSpacing.lg) {
-                    Text(activity.title).font(AlongFont.title).foregroundStyle(AlongColor.textPrimary)
+                    Text(activity.title).font(AlongFont.walkScreenHeading).foregroundStyle(AlongColor.textPrimary)
                     Text(activity.publicLocationLabel).font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
 
                     WhenField(label: "When", date: $start)
-                    if activity.kind == .cowork {
-                        VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                            Text("Until").font(AlongFont.label).foregroundStyle(AlongColor.textTertiary)
-                            DatePicker("Until", selection: Binding(
-                                get: { start.addingTimeInterval(duration) },
-                                set: { duration = max($0.timeIntervalSince(start), 15 * 60) }),
-                                       in: start.addingTimeInterval(15 * 60)..., displayedComponents: .hourAndMinute)
-                                .labelsHidden().datePickerStyle(.compact).tint(AlongColor.navy)
-                                .frame(maxWidth: .infinity, minHeight: AlongSize.minTouch, alignment: .leading)
-                        }
-                    }
                     OptionField(label: "Spots", options: ["1", "2", "3", "4", "5"],
                                 selection: Binding(get: { spots - 1 }, set: { spots = max($0 + 1, minimumSpots) }))
                     if minimumSpots > 1 {
                         Text("\(minimumSpots) people are already in, so spots can't go lower.")
                             .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
                     }
-                    AlongTextField(label: activity.kind == .walk ? "A little note" : "Working on", text: $note,
+                    AlongTextField(label: "A little note", text: $note,
                                    prompt: "Optional", axis: .vertical, lines: 1...3, limit: 140)
                     AlongTextField(label: "Meeting spot", text: $meeting, prompt: "Shared only with accepted guests",
                                    axis: .vertical, lines: 1...3, limit: 140)

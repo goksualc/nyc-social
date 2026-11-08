@@ -1,5 +1,4 @@
 import SwiftUI
-import AuthenticationServices
 
 /// Owns authentication state and the signed-in `AppStore`.
 ///
@@ -16,6 +15,7 @@ final class AppSession {
         var auth: any AuthService
         var backend: any AlongBackend
         var realtime: (any RealtimeService)?
+        var live: (any LiveWalkService)?
     }
 
     let isLive: Bool
@@ -29,7 +29,7 @@ final class AppSession {
     private(set) var notice: String?
     private(set) var isBusy = false
     private(set) var errorMessage: String?
-    /// Apple only shares the user's name on first sign-in; kept in memory to prefill the profile step.
+    /// The person's first name, kept in memory to prefill the profile step.
     private(set) var suggestedName = ""
 
     private let services: Services
@@ -50,10 +50,11 @@ final class AppSession {
             let manager = SupabaseManager(config: config)
             return AppSession(
                 services: Services(auth: SupabaseAuthService(manager: manager), backend: SupabaseBackend(manager: manager),
-                                   realtime: SupabaseRealtimeService(manager: manager)),
+                                   realtime: SupabaseRealtimeService(manager: manager),
+                                   live: SupabaseLiveWalkService(manager: manager)),
                 isLive: true, configProblem: nil)
         case .failure(let problem):
-            return AppSession(services: Services(auth: DemoAuthService(), backend: MockAlongBackend(), realtime: nil),
+            return AppSession(services: Services(auth: DemoAuthService(), backend: MockAlongBackend(), realtime: nil, live: MockLiveWalkService()),
                               isLive: false, configProblem: problem)
         }
     }
@@ -83,31 +84,6 @@ final class AppSession {
         }
     }
 
-    /// Completes Sign in with Apple. `rawNonce` is the unhashed nonce whose SHA-256 was sent in the request.
-    func signInWithApple(_ result: Result<ASAuthorization, Error>, rawNonce: String) async {
-        switch result {
-        case .failure(let error):
-            if (error as? ASAuthorizationError)?.code != .canceled {
-                errorMessage = "Couldn't sign in with Apple. Try again."
-            }
-        case .success(let authorization):
-            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-                  let tokenData = credential.identityToken, let idToken = String(data: tokenData, encoding: .utf8) else {
-                errorMessage = "Couldn't sign in with Apple. Try again."
-                return
-            }
-            if let name = credential.fullName {
-                let formatted = PersonNameComponentsFormatter().string(from: name).trimmingCharacters(in: .whitespaces)
-                if !formatted.isEmpty { knownFullName = formatted; suggestedName = name.givenName ?? formatted }
-            }
-            await run {
-                let session = try await self.services.auth.signInWithApple(idToken: idToken, nonce: rawNonce)
-                await self.enter(session)
-            }
-        }
-    }
-
-    /// Loads the profile and either asks for the basics or opens the app.
     /// Google, through Supabase OAuth. Cancelling the system sheet is not an error.
     func signInWithGoogle() async {
         await run {
@@ -223,6 +199,7 @@ final class AppSession {
         await run {
             try await self.services.backend.completeProfile(draft, fullName: self.knownFullName)
             await self.openStore()
+            if let jpeg = draft.avatarJPEG, let store = self.store { _ = await store.setAvatar(jpeg: jpeg) }
         }
     }
 
@@ -230,6 +207,7 @@ final class AppSession {
         do {
             let store = try await AppStore.bootstrap(backend: services.backend, realtime: services.realtime)
             store.onSessionExpired = { [weak self] in self?.sessionExpired() }
+            store.live = services.live
             self.store = store
             phase = .ready
             await store.startRealtime()

@@ -1,14 +1,12 @@
 import SwiftUI
 
 /// A floating rounded-square marker with a small stem. White with a navy glyph at rest; navy with a white glyph when selected.
-/// Walk and Cowork differ only by glyph, so the map stays calm.
 struct AlongMapMarker: View {
-    let kind: ActivityKind
     var isSelected = false
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(systemName: kind.symbol)
+            Image(systemName: "figure.walk")
                 .font(.system(size: isSelected ? 20 : 17, weight: .semibold))
                 .foregroundStyle(isSelected ? AlongColor.white : AlongColor.navy)
                 .frame(width: isSelected ? 50 : 42, height: isSelected ? 50 : 42)

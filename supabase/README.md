@@ -12,6 +12,7 @@ PostgreSQL + PostGIS + Row Level Security, with all writes going through validat
 | `migrations/…0004_rpc_functions.sql` | `create_walk`, `create_cowork`, `update_activity`, `cancel_activity`, `request_to_join`, `respond_to_join_request` (row-locked, capacity-safe), `discover_activities` (bbox), `nearby_activities` (radius), `list_my_activities`, `get_private_activity_details`, `block_user`, profile + account RPCs |
 | `migrations/…0005_storage_and_realtime.sql` | private `avatars` bucket + policies, Realtime publication |
 | `migrations/…0006_reports.sql` | `reports` table + `report_content()` |
+| `migrations/…0014_nyc_coverage.sql` | all five boroughs: borough outlines in `private.geo_regions`, neighbourhood labels for Brooklyn/Queens/The Bronx/Staten Island, and `is_in_manhattan`/`is_near_manhattan` redefined to mean "New York City" |
 | `config.toml` | Supabase CLI config (Apple provider, exposed schemas) |
 | `tests/` | Local test harness (see below) |
 
@@ -30,7 +31,7 @@ requests or conversations except the RPCs (there are no INSERT/UPDATE policies, 
   (a blocked profile is no longer readable, so the Blocked Users list needs a snapshot), public-geometry columns on the route/location
   tables, `pace` / `work_style` / `meeting_details`, and the `reports` table.
 * Guests learn about edits and cancellations through their own (RLS-scoped) `join_requests` rows — the RPCs touch them — so no client
-  subscribes to every activity in Manhattan.
+  subscribes to every activity in the city.
 
 ## Deploy to a Supabase project
 
@@ -42,7 +43,7 @@ requests or conversations except the RPCs (there are no INSERT/UPDATE policies, 
    npx supabase db push
    ```
    (or paste each file into the SQL editor in numeric order). PostGIS is created in the `extensions` schema.
-3. **Auth → Providers → Apple**: enable it and add your bundle id (`com.along.app`) to *Authorized Client IDs*.
+3. *(Sign in with Apple was removed from the app, so the Apple provider is not needed.)*
 4. In the iOS app:
    ```sh
    cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig   # git-ignored
@@ -50,7 +51,7 @@ requests or conversations except the RPCs (there are no INSERT/UPDATE policies, 
    xcodegen generate
    ```
    Without this file the app runs in **demo mode** (local data) and says so in *Profile → About Along*.
-5. In Xcode, set your Development Team and make sure the **Sign in with Apple** capability is enabled for the App ID.
+5. In Xcode, set your Development Team (a free Personal Team works: the app no longer uses any restricted capability).
 
 ## Tests
 
@@ -76,3 +77,4 @@ The harness stubs the pieces a Supabase project provides (`auth.uid()`, roles, `
   age assurance beyond a self-declaration. Add before a public launch.
 * **SDK version**: `supabase-swift` is pinned to 2.49.0 because 2.50+ needs Swift tools 6.1 (Xcode 16.3+). Raise `exactVersion` in `project.yml` after upgrading Xcode.
 * After adding new public functions, re-run the grant block at the end of migration 4 (or add explicit `grant execute` / `revoke … from anon`).
+

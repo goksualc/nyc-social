@@ -42,10 +42,7 @@ enum ActivityTime {
     }
 
     static func summary(_ activity: Activity, now: Date = .now, separator: String = " · ") -> String {
-        switch activity.kind {
-        case .walk: start(activity.startDate, now: now, separator: separator)
-        case .cowork: "\(day(activity.startDate, now: now))\(separator)\(range(activity.startDate, activity.endDate))"
-        }
+        start(activity.startDate, now: now, separator: separator)
     }
 
     /// Chat timestamps: "4:12 PM" today, otherwise "Tue".

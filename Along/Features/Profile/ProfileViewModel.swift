@@ -9,24 +9,17 @@ final class ProfileViewModel {
 
     var me: User { store.me }
 
-    func toggle(_ interest: Interest) async {
-        var u = me
-        if let i = u.interests.firstIndex(of: interest) { u.interests.remove(at: i) } else { u.interests.append(interest) }
-        Haptics.selection()
-        await store.updateProfile(u, silent: true)
-    }
+    private(set) var stats: WalkStats?
 
-    func toggle(_ purpose: AlongPurpose) async {
-        var u = me
-        if u.alongFor.contains(purpose) {
-            guard u.alongFor.count > 1 else { return }   // keep at least one
-            u.alongFor.remove(purpose)
-        } else { u.alongFor.insert(purpose) }
-        Haptics.selection()
-        await store.updateProfile(u, silent: true)
+    private(set) var recentWalks: [CompletedWalk] = []
+
+    /// Real totals and the latest completed walks, from the same history the Walk History screen uses.
+    func loadStats() async {
+        stats = try? await store.walks.stats()
+        recentWalks = Array(((try? await store.walks.history()) ?? []).prefix(6))
     }
 }
 
 enum SettingsDestination: Hashable {
-    case visibility, location, notifications, blocked, about
+    case home, visibility, location, notifications, blocked, about, history
 }

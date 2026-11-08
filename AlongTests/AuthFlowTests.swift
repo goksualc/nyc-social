@@ -14,7 +14,6 @@ final class StubAuthService: AuthService, @unchecked Sendable {
     private(set) var signedOut = false
 
     func restoreSession() async throws -> AuthSession? { stored }
-    func signInWithApple(idToken: String, nonce: String) async throws -> AuthSession { try signInResult.get() }
     func signInWithGoogle() async throws -> AuthSession { calls.append("google"); return try googleResult.get() }
     func signIn(email: String, password: String) async throws -> AuthSession { calls.append("signIn:\(email)"); return try signInResult.get() }
     func signUp(email: String, password: String, fullName: String) async throws -> SignUpOutcome { calls.append("signUp:\(email)"); return try signUpResult.get() }
@@ -189,4 +188,6 @@ final class AuthFlowTests: XCTestCase {
         await s.signInWithEmail(email: "c@d.co", password: "password1")
         XCTAssertEqual(s.phase, .ready)
     }
+
+
 }

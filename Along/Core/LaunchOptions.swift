@@ -11,6 +11,10 @@ struct LaunchOptions {
     var create: String?
     var conversation: String?
     var welcomeStep: String?
+    var live = false
+    var inboxFilter: String?
+    var onboarding = false
+    var readyAll = false
 
     static let current: LaunchOptions = {
         #if DEBUG
@@ -19,7 +23,8 @@ struct LaunchOptions {
         return LaunchOptions(skipOnboarding: args.contains("-along-skip-onboarding"), tab: value("-along-tab").flatMap(Int.init),
                              detent: value("-along-detent"), select: value("-along-select"), open: value("-along-open"),
                              create: value("-along-create"), conversation: value("-along-conversation"),
-                             welcomeStep: value("-along-welcome-step"))
+                             welcomeStep: value("-along-welcome-step"), live: args.contains("-along-live"), inboxFilter: value("-along-inbox"),
+                             onboarding: args.contains("-along-onboarding"), readyAll: args.contains("-along-ready"))
         #else
         return LaunchOptions()
         #endif

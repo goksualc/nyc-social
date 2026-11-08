@@ -21,9 +21,10 @@ final class CreateActivityViewModel {
     var route: RoutePreview?
     var routeCamera: MapCameraPosition = .automatic
 
-    // Cowork
-    var venue: Place?
-    var style: WorkStyle = .deepWork
+    // What's on your mind (optional, free text)
+    var mindPrompt = ""
+    /// Interests shown instead of a profile when the organizer stays anonymous (at most four, picked from their own).
+    var hostInterests: [String] = []
 
     init(store: AppStore) {
         self.store = store
@@ -40,14 +41,14 @@ final class CreateActivityViewModel {
         set { duration = max(newValue.timeIntervalSince(start), 15 * 60) }
     }
 
-    var walkIsValid: Bool {
+    var routeIsValid: Bool {
         guard let from, let to else { return false }
         return from.coordinate.distance(to: to.coordinate) > 50
     }
-    var coworkIsValid: Bool { venue != nil && duration >= 15 * 60 }
+    var walkIsValid: Bool { routeIsValid }
 
     var walkHint: String? {
-        guard let from, let to, !walkIsValid else { return nil }
+        guard let from, let to, !routeIsValid else { return nil }
         _ = (from, to)
         return "Start and destination need to be different."
     }
@@ -55,7 +56,7 @@ final class CreateActivityViewModel {
     // MARK: Route preview
 
     func updateRoute() async {
-        guard let from, let to, walkIsValid else { route = nil; return }
+        guard let from, let to, routeIsValid else { route = nil; return }
         let preview = await RouteService.walkingRoute(from: from.coordinate, to: to.coordinate)
         route = preview
         routeCamera = .rect(ActivityDetailViewModel.rect(for: preview.coordinates))
@@ -74,27 +75,32 @@ final class CreateActivityViewModel {
         switch Calendar.current.component(.hour, from: d) { case ..<12: "Morning"; case ..<17: "Afternoon"; default: "Evening" }
     }
 
-    func publishWalk() async -> Bool {
-        guard let from, let to else { return false }
-        let draft = ActivityDraft(
-            title: "\(daypart(start)) walk to \(to.publicLabel)",
-            details: .walk(WalkInfo(from: from, to: to, pace: pace)),
-            startDate: start, endDate: start.addingTimeInterval(max(RouteService.estimate(from.coordinate, to.coordinate).travelTime, 30 * 60)),
-            visibility: visibility, capacity: spots,
-            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
-            meetingDetails: meetingDetails.trimmingCharacters(in: .whitespacesAndNewlines),
-            routeCoordinates: route.map { $0.isEstimate ? [] : Self.downsample($0.coordinates, to: 400) } ?? [])
-        return await publish(draft)
+    private var walkTitle: String {
+        guard let to else { return "Walk" }
+        return "\(daypart(start)) walk to \(to.publicLabel)"
     }
 
-    func publishCowork() async -> Bool {
-        guard let venue else { return false }
+    /// "Private" means: the walk is on the map for everyone, only the organizer's identity is hidden.
+    var hidesIdentity: Bool { visibility == .private }
+    var myHobbies: [String] { store.me.hobbies }
+
+    func toggleInterest(_ hobby: String) {
+        if let i = hostInterests.firstIndex(of: hobby) { hostInterests.remove(at: i) }
+        else if hostInterests.count < 4 { hostInterests.append(hobby) }
+    }
+
+    func publishWalk() async -> Bool {
+        guard let from, let to, walkIsValid else { return false }
         let draft = ActivityDraft(
-            title: "Working from \(venue.area)",
-            details: .cowork(CoworkInfo(venue: venue, style: style)),
-            startDate: start, endDate: end, visibility: visibility, capacity: spots,
+            title: walkTitle,
+            walk: WalkInfo(from: from, to: to, pace: pace),
+            startDate: start, endDate: start.addingTimeInterval(max(RouteService.estimate(from.coordinate, to.coordinate).travelTime, 30 * 60)),
+            visibility: .public, capacity: spots,
             note: note.trimmingCharacters(in: .whitespacesAndNewlines),
-            meetingDetails: meetingDetails.trimmingCharacters(in: .whitespacesAndNewlines))
+            meetingDetails: meetingDetails.trimmingCharacters(in: .whitespacesAndNewlines),
+            routeCoordinates: route.map { $0.isEstimate ? [] : Self.downsample($0.coordinates, to: 400) } ?? [],
+            anonymousHost: hidesIdentity, hostInterests: hidesIdentity ? Array(hostInterests.prefix(4)) : [],
+            mindPrompt: mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
         return await publish(draft)
     }
 

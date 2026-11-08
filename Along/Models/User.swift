@@ -2,43 +2,48 @@ import Foundation
 
 typealias ID = String
 
-enum Interest: String, CaseIterable, Codable, Sendable, Identifiable {
-    case tech = "Tech", coffee = "Coffee", startups = "Startups", fitness = "Fitness"
-    case art = "Art", design = "Design", books = "Books", walking = "Walking"
-    var id: String { rawValue }
-    /// Value stored in `profiles.interests`.
-    var dbValue: String { rawValue.lowercased() }
-    init?(dbValue: String) { self.init(rawValue: dbValue.prefix(1).uppercased() + dbValue.dropFirst()) }
-}
-
-enum AlongPurpose: String, CaseIterable, Codable, Sendable, Identifiable {
-    case walkingBuddies = "Walking buddies"
-    case coworkingCompany = "Coworking company"
-    var id: String { rawValue }
-    /// Value stored in `profiles.looking_for`.
-    var dbValue: String { self == .walkingBuddies ? "walking_buddies" : "coworking_company" }
-    init?(dbValue: String) {
-        switch dbValue {
-        case "walking_buddies": self = .walkingBuddies
-        case "coworking_company": self = .coworkingCompany
-        default: return nil
-        }
-    }
-}
-
 struct User: Identifiable, Hashable, Codable, Sendable {
     var id: ID
     var firstName: String
-    var neighborhood: String = "Manhattan, NYC"
+    var neighborhood: String = "New York City"
     var bio: String
-    var interests: [Interest]
-    var alongFor: Set<AlongPurpose>
+    /// Hobbies from the catalogue plus any custom ones.
+    var hobbies: [String]
     /// Index into the muted avatar tone list (also the fallback when a person has no photo).
     var avatarTone: Int = 0
     /// Path of the profile photo inside the private `avatars` Storage bucket, if any.
     var avatarPath: String?
 
+    // Optional "about me" details. Nothing here is a street address.
+    var age: Int?
+    var occupation: String?
+    var university: String?
+    var languages: [String] = []
+    var instagram: String?
+    var xHandle: String?
+
+    // Walking and conversation preferences.
+    var pacePreference: PacePreference?
+    var preferredDuration: Int?
+    var favoriteNeighborhoods: [String] = []
+    var discussionTopics: [ConversationTopic] = []
+    var conversationCustom: [String] = []
+
+    /// True for an organizer who stays anonymous. Such a user has no profile, photo or name to show.
+    var isAnonymous = false
+
     var initial: String { String(firstName.prefix(1)).uppercased() }
+
+    static let anonymousName = "Anonymous Walker"
+    static let anonymousTagline = "Get to know each other over a walk."
+    static let anonymousPrefix = "anon:"
+
+    /// A stand-in for a hidden organizer. `id` is the server's opaque alias, never a real user id.
+    static func anonymousHost(id: ID, interests: [String] = []) -> User {
+        User(id: id, firstName: anonymousName, bio: "", hobbies: interests, avatarTone: 0, avatarPath: nil, isAnonymous: true)
+    }
+    static func isAlias(_ id: ID) -> Bool { id.hasPrefix(anonymousPrefix) }
+    func handle(for network: SocialNetwork) -> String? { network == .instagram ? instagram : xHandle }
 }
 
 enum ProfileVisibility: String, CaseIterable, Codable, Sendable, Identifiable {
@@ -53,6 +58,9 @@ enum ProfileVisibility: String, CaseIterable, Codable, Sendable, Identifiable {
 struct UserSettings: Codable, Hashable, Sendable {
     var profileVisibility: ProfileVisibility = .everyone
     var useLocationToCenterMap = true
+    /// Shows my completed-walk totals (never individual walks) on my public profile.
+    var showWalkStats = false
+    var showAge = false
     var notifyRequests = true
     var notifyMessages = true
     var notifyReminders = true

@@ -51,7 +51,7 @@ struct RootView: View {
         case .checkInbox:
             if case .emailVerification(let email) = session.phase { CheckInboxView(email: email).transition(.opacity) }
         case .recovery: UpdatePasswordView().transition(.opacity)
-        case .profile: CompleteProfileView().transition(.opacity)
+        case .profile: OnboardingFlowView().transition(.opacity)
         case .main:
             if let store = session.store { MainTabView().environment(store).environment(\.avatarLoader, store.avatars).transition(.opacity) }
         case .failed:

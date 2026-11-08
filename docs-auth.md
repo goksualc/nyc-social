@@ -1,4 +1,4 @@
-# Authentication setup (Apple · Google · Email)
+# Authentication setup (Google · Email)
 
 All three methods use the same Supabase Auth user; `profiles.id` = `auth.users.id` (created by the `handle_new_user` trigger).
 
@@ -23,8 +23,7 @@ Sign In / Providers → set minimum password length (the app enforces 8 client-s
 Customise templates if wanted; the default SMTP is rate-limited — configure custom SMTP before launch.
 
 ## Apple
-Providers → Apple → enable; Client IDs: `com.along.app`. Set your Development Team in Xcode (Sign in with Apple capability is in the entitlements).
-For account deletion, Apple requires token revocation (needs the Apple key/secret; not implemented client-side).
+Sign in with Apple is **not offered**: a free (Personal Team) Apple developer account can't create a provisioning profile with that capability. If you later join the Apple Developer Program, note that App Store guideline 4.8 expects it whenever another third-party login (Google) is offered.
 
 ## Legal links
 Set `LEGAL_TERMS_URL` / `LEGAL_PRIVACY_URL` in `Config/Secrets.xcconfig` (`https:/$()/…`). Until set, the footer text is not linked.

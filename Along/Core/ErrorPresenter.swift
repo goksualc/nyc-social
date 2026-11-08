@@ -19,6 +19,8 @@ enum ErrorPresenter {
         if let pg = error as? PostgrestError {
             if let known = AlongError(serverCode: pg.message) { return known }
             if pg.code == "PGRST301" || pg.message.localizedCaseInsensitiveContains("jwt") { return .sessionExpired }
+            // PGRST202 / PGRST204 / 42883: the app calls a function or column the database doesn't have yet (migrations not applied).
+            if ["PGRST202", "PGRST204", "42883", "42703"].contains(pg.code ?? "") { return .backendOutOfDate }
             if pg.code == "42501" { return .notAllowed }             // insufficient_privilege / RLS
             if pg.code == "23505" { return .alreadyRequested }       // unique_violation
             return .generic

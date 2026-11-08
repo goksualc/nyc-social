@@ -16,6 +16,7 @@ private struct ActivityDetailContent: View {
     @State private var vm: ActivityDetailViewModel
     let isSheet: Bool
     @Environment(\.dismiss) private var dismiss
+    @State private var showLiveWalk = false
 
     init(store: AppStore, activityID: ID, isSheet: Bool) {
         _vm = State(initialValue: ActivityDetailViewModel(store: store, activityID: activityID))
@@ -79,6 +80,8 @@ private struct ActivityDetailContent: View {
             Button("Stay", role: .cancel) {}
         } message: { Text("You'll lose access to the meeting details and chat.") }
         .task { await vm.loadRoute() }
+        .onAppear { if LaunchOptions.current.live { showLiveWalk = true } }
+        .fullScreenCover(isPresented: $showLiveWalk) { LiveWalkFlowView(activityID: vm.activityID).environment(vm.store).environment(\.avatarLoader, vm.store.avatars) }
     }
 
     // MARK: Content
@@ -90,6 +93,7 @@ private struct ActivityDetailContent: View {
                 infoCard(a)
                 if !a.note.isEmpty { noteView(a) }
                 locationPreview(a)
+                walkTogetherCard(a)
                 if a.hasPreciseAccess && !a.meetingDetails.isEmpty { meetingCard(a) }
                 if vm.isHost { managementSection(a) } else { hostCard }
                 if !vm.isHost { safetyRow }
@@ -104,8 +108,8 @@ private struct ActivityDetailContent: View {
     private func header(_ a: Activity) -> some View {
         VStack(alignment: .leading, spacing: AlongSpacing.sm) {
             HStack(spacing: 5) {
-                Image(systemName: a.kind.symbol).font(.system(size: 11, weight: .semibold))
-                Text(a.kind.label).font(AlongFont.label)
+                Image(systemName: "figure.walk").font(.system(size: 11, weight: .semibold))
+                Text("Walk").font(AlongFont.label)
                 if a.visibility == .private { Text("· Private").font(AlongFont.label) }
             }
             .foregroundStyle(AlongColor.navy)
@@ -113,7 +117,7 @@ private struct ActivityDetailContent: View {
             .background(AlongColor.surface, in: Capsule())
 
             Text(a.title)
-                .font(.system(.title, design: .serif, weight: .semibold))
+                .font(AlongFont.walkDetailTitle)
                 .foregroundStyle(AlongColor.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -135,23 +139,17 @@ private struct ActivityDetailContent: View {
     private func infoCard(_ a: Activity) -> some View {
         VStack(alignment: .leading, spacing: AlongSpacing.md) {
             AlongInfoRow(symbol: "clock", text: ActivityTime.summary(a, now: vm.store.now))
-            AlongInfoRow(symbol: a.kind == .walk ? "arrow.triangle.turn.up.right.diamond" : "mappin.and.ellipse",
+            AlongInfoRow(symbol: "arrow.triangle.turn.up.right.diamond",
                          text: a.publicLocationLabel,
                          secondary: a.hasPreciseAccess ? nil : "General area only")
-            switch a.details {
-            case .walk(let w): AlongInfoRow(symbol: "figure.walk", text: "\(w.pace.rawValue) pace")
-            case .cowork(let c): AlongInfoRow(symbol: "laptopcomputer", text: "Work style: \(Self.styleName(c.style))")
-            }
+            AlongInfoRow(symbol: "figure.walk", text: "\(a.walk.pace.rawValue) pace")
+            if let prompt = a.mindPrompt { AlongInfoRow(symbol: "bubble.left", text: "On their mind: \(prompt)") }
             AlongInfoRow(symbol: "person.2",
                          text: a.isFull ? "No spots left" : (a.spotsLeft == 1 ? "1 spot available" : "\(a.spotsLeft) spots available"))
         }
         .padding(AlongSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .alongCard()
-    }
-
-    private static func styleName(_ s: WorkStyle) -> String {
-        switch s { case .deepWork: "Focused"; case .social: "Social"; case .buildTogether: "Build together" }
     }
 
     private func noteView(_ a: Activity) -> some View {
@@ -165,8 +163,7 @@ private struct ActivityDetailContent: View {
 
     @ViewBuilder
     private func locationPreview(_ a: Activity) -> some View {
-        switch a.details {
-        case .walk(let w):
+        let w = a.walk
             VStack(alignment: .leading, spacing: AlongSpacing.xs) {
                 Map(position: $vm.routeCamera, interactionModes: []) {
                     let coords = (vm.route?.coordinates ?? [w.from.coordinate, w.to.coordinate]).map(\.cl)
@@ -186,33 +183,6 @@ private struct ActivityDetailContent: View {
                     .font(AlongFont.caption)
                     .foregroundStyle(AlongColor.textTertiary)
             }
-        case .cowork(let c):
-            HStack(spacing: 0) {
-                Map(initialPosition: .camera(MapCamera(centerCoordinate: c.venue.coordinate.cl, distance: 1100)), interactionModes: []) {
-                    MapCircle(center: c.venue.coordinate.cl, radius: 160)
-                        .foregroundStyle(AlongColor.navy.opacity(0.10))
-                        .stroke(AlongColor.navy.opacity(0.5), lineWidth: 1.5)
-                    Annotation("", coordinate: c.venue.coordinate.cl, anchor: .center) { AlongMapMarker(kind: .cowork) }
-                }
-                .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
-                .frame(width: 112, height: 112)
-                .allowsHitTesting(false)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(a.hasPreciseAccess && !c.venue.name.isEmpty ? c.venue.name : "Coffee shop")
-                        .font(AlongFont.headline).foregroundStyle(AlongColor.textPrimary)
-                    Text(c.venue.area).font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
-                    Text(a.hasPreciseAccess ? "Exact spot below" : "Exact café shared once accepted")
-                        .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
-                }
-                .padding(AlongSpacing.md)
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity)
-            .background(AlongColor.white)
-            .clipShape(RoundedRectangle(cornerRadius: AlongRadius.card, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: AlongRadius.card, style: .continuous).stroke(AlongColor.border, lineWidth: 1))
-            .accessibilityElement(children: .combine)
-        }
     }
 
     private var routeCaption: String {
@@ -220,13 +190,33 @@ private struct ActivityDetailContent: View {
         return "\(r.summary) · approximate route"
     }
 
+    /// "Your walk is coming up!" — appears once a walking buddy is accepted. Live walks are exactly two people for now.
+    @ViewBuilder private func walkTogetherCard(_ a: Activity) -> some View {
+        let accepted = a.participantCount ?? a.participantIDs.count
+        let isMember = vm.isHost || vm.role == .accepted
+        if isMember, a.isActive(at: vm.store.now), accepted >= 1 {
+            VStack(alignment: .leading, spacing: AlongSpacing.sm) {
+                Label("Your walk is coming up!", systemImage: "figure.walk.motion")
+                    .font(AlongFont.headline).foregroundStyle(AlongColor.textPrimary)
+                if accepted == 1 {
+                    Text("When you're both there, open the walk and tap I'm Ready. You'll see each other on the map until you finish.")
+                        .font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
+                    AlongButton(title: "Open Walk") { showLiveWalk = true }
+                } else {
+                    Text("Live walks are for two people for now. Keep just one walking buddy accepted to use the shared map.")
+                        .font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
+                }
+            }
+            .padding(AlongSpacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .alongCard()
+        }
+    }
+
     private func meetingCard(_ a: Activity) -> some View {
         VStack(alignment: .leading, spacing: AlongSpacing.xs) {
             Label("Meeting details", systemImage: "mappin.circle")
                 .font(AlongFont.subheadEmphasis).foregroundStyle(AlongColor.navy)
-            if let c = a.cowork, let address = c.venue.address, !address.isEmpty {
-                Text("\(c.venue.name), \(address)").font(AlongFont.bodyEmphasis).foregroundStyle(AlongColor.textPrimary)
-            }
             Text(a.meetingDetails).font(AlongFont.body).foregroundStyle(AlongColor.textPrimary)
             Text(vm.isHost ? "Only you and accepted guests can see this." : "Shared with you because you're in. Please keep it between us.")
                 .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
@@ -254,7 +244,7 @@ private struct ActivityDetailContent: View {
                     }
                     Text(host.bio).font(AlongFont.subhead).foregroundStyle(AlongColor.textPrimary).multilineTextAlignment(.leading)
                     FlowLayout(spacing: 6) {
-                        ForEach(host.interests) { AlongChip(title: $0.rawValue) }
+                        ForEach(host.hobbies.prefix(6), id: \.self) { AlongChip(title: $0) }
                     }
                 }
                 .padding(AlongSpacing.md)

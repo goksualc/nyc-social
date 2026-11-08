@@ -21,7 +21,7 @@ final class LiveBackendIntegrationTests: XCTestCase {
     }
 
     private func draft(_ name: String) -> ProfileDraft {
-        ProfileDraft(displayName: name, bio: "Hi, I'm \(name)", interests: [.coffee, .walking], alongFor: [.walkingBuddies], confirmAge: true)
+        ProfileDraft(displayName: name, bio: "Hi, I'm \(name)", confirmAge: true, hobbies: ["Coffee", "Walking"])
     }
 
     private var manhattanBox: DiscoveryQuery {
@@ -41,17 +41,17 @@ final class LiveBackendIntegrationTests: XCTestCase {
         let after = try await a.backend.loadMyProfile()
         XCTAssertTrue(after.isComplete)
         XCTAssertEqual(after.user.firstName, "Ada")
-        XCTAssertEqual(after.user.interests, [.coffee, .walking])
+        XCTAssertEqual(after.user.hobbies, ["Coffee", "Walking"])
 
-        // ---- A publishes a walk (with a real route) and a cowork session
-        let from = ManhattanGeo.street(72), to = ManhattanGeo.street(55)
+        // ---- A publishes a Just Walk (with a real route) and an Overthink Together walk
+        let from = NYCGeo.street(72), to = NYCGeo.street(55)
         let route = (0...20).map { i -> Coordinate in
             let t = Double(i) / 20
             return Coordinate(from.coordinate.latitude + (to.coordinate.latitude - from.coordinate.latitude) * t,
                               from.coordinate.longitude + (to.coordinate.longitude - from.coordinate.longitude) * t)
         }
         let start = Date().addingTimeInterval(3 * 3600)
-        let walkDraft = ActivityDraft(title: "Evening walk to Midtown", details: .walk(WalkInfo(from: from, to: to, pace: .casual)),
+        let walkDraft = ActivityDraft(title: "Evening walk to Midtown", walk: WalkInfo(from: from, to: to, pace: .casual),
                                       startDate: start, endDate: start.addingTimeInterval(3600), visibility: .public, capacity: 1,
                                       note: "Getting my steps in", meetingDetails: "South-west corner of 72nd & Broadway", routeCoordinates: route)
         var snapA = try await a.backend.createActivity(walkDraft)
@@ -59,26 +59,27 @@ final class LiveBackendIntegrationTests: XCTestCase {
         XCTAssertTrue(walk.hasPreciseAccess)
         XCTAssertEqual(walk.meetingDetails, "South-west corner of 72nd & Broadway")
         XCTAssertEqual(walk.routeCoordinates.count, 21, "host gets the saved route back")
-        XCTAssertEqual(walk.walk?.from.coordinate.latitude ?? 0, from.coordinate.latitude, accuracy: 1e-6, "host sees exact start")
+        XCTAssertEqual(walk.walk.from.coordinate.latitude ?? 0, from.coordinate.latitude, accuracy: 1e-6, "host sees exact start")
 
-        var cafe = ManhattanGeo.cafes[0]; cafe.address = "142 Prince St"
         let coStart = Date().addingTimeInterval(5 * 3600)
         snapA = try await a.backend.createActivity(ActivityDraft(
-            title: "Working from SoHo", details: .cowork(CoworkInfo(venue: cafe, style: .deepWork)), startDate: coStart,
-            endDate: coStart.addingTimeInterval(4 * 3600), visibility: .public, capacity: 2, note: "Startup stuff", meetingDetails: "Big table"))
+            title: "Let's overthink our careers.",
+            walk: WalkInfo(from: NYCGeo.street(23), to: NYCGeo.street(14), pace: .moderate),
+            startDate: coStart, endDate: coStart.addingTimeInterval(3600), visibility: .public, capacity: 2, note: "Big decision", meetingDetails: "By the C/E entrance",
+            mindPrompt: "Changing teams"))
         let privateStart = Date().addingTimeInterval(6 * 3600)
         snapA = try await a.backend.createActivity(ActivityDraft(
-            title: "Secret session", details: .cowork(CoworkInfo(venue: ManhattanGeo.cafes[1], style: .social)), startDate: privateStart,
-            endDate: privateStart.addingTimeInterval(3600), visibility: .private, capacity: 1, note: "", meetingDetails: ""))
+            title: "Secret walk", walk: WalkInfo(from: NYCGeo.street(40), to: NYCGeo.street(50), pace: .casual),
+            startDate: privateStart, endDate: privateStart.addingTimeInterval(3600), visibility: .private, capacity: 1, note: "", meetingDetails: ""))
         XCTAssertEqual(snapA.activities.count, 3)
 
         // ---- validation happens server-side too
         let outside = Place(name: "Prospect Park", area: "", coordinate: Coordinate(40.6602, -73.9690))
         do {
-            _ = try await a.backend.createActivity(ActivityDraft(title: "x", details: .cowork(CoworkInfo(venue: outside, style: .social)), startDate: start,
+            _ = try await a.backend.createActivity(ActivityDraft(title: "x", walk: WalkInfo(from: outside, to: NYCGeo.street(40), pace: .casual), startDate: start,
                                                                   endDate: start.addingTimeInterval(3600), visibility: .public, capacity: 1, note: "", meetingDetails: ""))
-            XCTFail("outside Manhattan accepted")
-        } catch { XCTAssertEqual(ErrorPresenter.map(error), .outsideManhattan) }
+            XCTFail("a place outside New York City was accepted")
+        } catch { XCTAssertEqual(ErrorPresenter.map(error), .outsideNYC) }
         do {
             var past = walkDraft; past.startDate = Date().addingTimeInterval(-7200); past.endDate = Date().addingTimeInterval(-3600)
             _ = try await a.backend.createActivity(past)
@@ -87,31 +88,29 @@ final class LiveBackendIntegrationTests: XCTestCase {
 
         // ---- B discovers (public, approximate only)
         let page = try await b.backend.discover(manhattanBox)
-        XCTAssertEqual(Set(page.activities.map(\.title)), ["Evening walk to Midtown", "Working from SoHo"], "private plan is never discoverable")
+        XCTAssertEqual(Set(page.activities.map(\.title)), ["Evening walk to Midtown", "Let's overthink our careers."], "private plan is never discoverable")
         let seenWalk = try XCTUnwrap(page.activities.first { $0.id == walk.id })
         XCTAssertFalse(seenWalk.hasPreciseAccess)
         XCTAssertEqual(seenWalk.meetingDetails, "")
-        XCTAssertNotEqual(seenWalk.walk?.from.coordinate, from.coordinate, "public start is snapped, not exact")
-        XCTAssertLessThan(seenWalk.walk?.from.coordinate.distance(to: from.coordinate) ?? .infinity, 400)
+        XCTAssertNotEqual(seenWalk.walk.from.coordinate, from.coordinate, "public start is snapped, not exact")
+        XCTAssertLessThan(seenWalk.walk.from.coordinate.distance(to: from.coordinate), 400)
         XCTAssertEqual(seenWalk.publicLocationLabel, "72nd St → 55th St")
-        let seenCowork = try XCTUnwrap(page.activities.first { $0.title == "Working from SoHo" })
-        XCTAssertEqual(seenCowork.cowork?.venue.name, "", "café name is hidden until accepted")
-        XCTAssertEqual(seenCowork.spotsLeft, 2)
+        let seenTalk = try XCTUnwrap(page.activities.first { $0.title == "Let's overthink our careers." })
+        XCTAssertEqual(seenTalk.mindPrompt, "Changing teams")
+        XCTAssertNil(seenWalk.mindPrompt, "no prompt unless the organizer wrote one")
+        XCTAssertEqual(seenTalk.spotsLeft, 2)
         XCTAssertEqual(page.hosts.first?.firstName, "Ada")
 
-        var walksOnly = manhattanBox; walksOnly.kind = .walk
-        let walksPage = try await b.backend.discover(walksOnly)
-        XCTAssertEqual(walksPage.activities.map(\.title), ["Evening walk to Midtown"])
         var paged = manhattanBox; paged.limit = 1
         let first = try await b.backend.discover(paged)
         XCTAssertEqual(first.activities.count, 1); XCTAssertTrue(first.hasMore)
         paged.offset = 1
         let second = try await b.backend.discover(paged)
         XCTAssertEqual(second.activities.count, 1); XCTAssertFalse(second.hasMore)
-        var soho = manhattanBox; soho.minLat = 40.715; soho.maxLat = 40.730; soho.minLng = -74.010; soho.maxLng = -73.990
-        let sohoPage = try await b.backend.discover(soho)
-        XCTAssertTrue(sohoPage.activities.allSatisfy { $0.kind == .cowork }, "bounding box excludes the uptown walk start")
-        let near = try await b.backend.nearby(to: ManhattanGeo.street(72).coordinate, radiusMeters: 1500, kind: nil, limit: 10)
+        var chelsea = manhattanBox; chelsea.minLat = 40.735; chelsea.maxLat = 40.755; chelsea.minLng = -74.005; chelsea.maxLng = -73.980
+        let chelseaPage = try await b.backend.discover(chelsea)
+        XCTAssertTrue(chelseaPage.activities.allSatisfy { $0.title == "Let's overthink our careers." }, "bounding box excludes the uptown walk start")
+        let near = try await b.backend.nearby(to: NYCGeo.street(72).coordinate, radiusMeters: 1500, limit: 10)
         XCTAssertEqual(near.activities.map(\.title), ["Evening walk to Midtown"])
 
         // ---- B requests; duplicates and own-plan requests are refused
@@ -155,7 +154,7 @@ final class LiveBackendIntegrationTests: XCTestCase {
         let unlocked = try XCTUnwrap(snapGuest.activities.first { $0.id == walk.id })
         XCTAssertTrue(unlocked.hasPreciseAccess)
         XCTAssertEqual(unlocked.meetingDetails, "South-west corner of 72nd & Broadway")
-        XCTAssertEqual(unlocked.walk?.from.coordinate.latitude ?? 0, from.coordinate.latitude, accuracy: 1e-6)
+        XCTAssertEqual(unlocked.walk.from.coordinate.latitude, from.coordinate.latitude, accuracy: 1e-6)
         XCTAssertEqual(snapGuest.conversations.count, 1)
         let snapOther = try await other.backend.loadSnapshot()
         XCTAssertEqual(snapOther.conversations.count, 0, "non-participants can't see the conversation")
@@ -203,7 +202,7 @@ final class LiveBackendIntegrationTests: XCTestCase {
         XCTAssertFalse(bDiscover.activities.contains { $0.hostID == a.id })
         let aSees = try await a.backend.discover(manhattanBox)
         XCTAssertTrue(aSees.activities.isEmpty || !aSees.activities.contains { $0.hostID == b.id })
-        do { _ = try await b.backend.requestToJoin(activityID: seenCowork.id); XCTFail("requested a blocked host's plan") }
+        do { _ = try await b.backend.requestToJoin(activityID: seenTalk.id); XCTFail("requested a blocked host's plan") }
         catch { XCTAssertEqual(ErrorPresenter.map(error), .notFound) }
         let unblocked = try await b.backend.unblock(userID: a.id)
         XCTAssertFalse(unblocked.blockedUserIDs.contains(a.id))
@@ -213,18 +212,30 @@ final class LiveBackendIntegrationTests: XCTestCase {
         try await b.backend.report(.activity(walk.id), reason: .unsafe)
 
         // ---- cancel
-        snapA = try await a.backend.cancelActivity(id: seenCowork.id)
-        XCTAssertTrue(snapA.activities.first { $0.id == seenCowork.id }?.isCancelled == true)
+        snapA = try await a.backend.cancelActivity(id: seenTalk.id)
+        XCTAssertTrue(snapA.activities.first { $0.id == seenTalk.id }?.isCancelled == true)
         let afterCancel = try await b.backend.discover(manhattanBox)
-        XCTAssertFalse(afterCancel.activities.contains { $0.id == seenCowork.id }, "cancelled plans leave discovery")
+        XCTAssertFalse(afterCancel.activities.contains { $0.id == seenTalk.id }, "cancelled plans leave discovery")
 
         // ---- profile edits round-trip
         var me = try await b.backend.loadSnapshot().me
-        me.bio = "Updated bio"; me.interests = [.art]
+        me.bio = "Updated bio"; me.hobbies = ["Art"]; me.instagram = "ada.l"; me.pacePreference = .slow; me.preferredDuration = 30
         let saved = try await b.backend.updateProfile(me)
         XCTAssertEqual(saved.bio, "Updated bio")
         let reloaded = try await b.backend.loadMyProfile()
-        XCTAssertEqual(reloaded.user.interests, [.art])
+        XCTAssertEqual(reloaded.user.hobbies, ["Art"]); XCTAssertEqual(reloaded.user.instagram, "ada.l"); XCTAssertEqual(reloaded.user.pacePreference, .slow)
+        // ---- profile photo: upload → write avatar_url → signed URL → survives a fresh load → delete
+        let jpeg = try XCTUnwrap(AvatarImage.jpeg(from: UIGraphicsImageRenderer(size: CGSize(width: 800, height: 600)).jpegData(withCompressionQuality: 0.9) { ctx in
+            UIColor.systemTeal.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 800, height: 600)) }))
+        let photoPath = try await b.backend.uploadAvatar(jpeg)
+        try await b.backend.updateAvatarPath(photoPath)
+        let withPhoto = try await b.backend.loadMyProfile()
+        XCTAssertEqual(withPhoto.user.avatarPath, photoPath, "the photo persists across a fresh load")
+        let signed = try await b.backend.avatarURL(path: photoPath)
+        XCTAssertTrue(signed.absoluteString.contains("avatars"))
+        try await b.backend.updateAvatarPath(nil)
+        try await b.backend.deleteAvatar(path: photoPath)
+
         var settings = UserSettings(); settings.profileVisibility = .activityMembers
         try await b.backend.updateSettings(settings)
         let reloadedVisibility = try await b.backend.loadMyProfile().visibility

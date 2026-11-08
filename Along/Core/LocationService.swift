@@ -16,6 +16,21 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters   // approximate is plenty
     }
 
+    var isPrecise: Bool { manager.accuracyAuthorization == .fullAccuracy }
+    var canAskForPermission: Bool { status == .notDetermined }
+
+    /// Onboarding / walk start: shows the system "While Using the App" prompt. Never asks for Always.
+    func requestWhenInUse() {
+        if status == .notDetermined { manager.requestWhenInUseAuthorization() }
+    }
+
+    /// A live walk works best with precise location. When the person chose approximate, this asks (once, with a reason)
+    /// for *temporary* precise access; the system decides whether to show it.
+    func requestTemporaryPrecise() async {
+        guard isAuthorized, manager.accuracyAuthorization == .reducedAccuracy else { return }
+        try? await manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "LiveWalk")
+    }
+
     var isAuthorized: Bool { status == .authorizedWhenInUse || status == .authorizedAlways }
     var isDenied: Bool { status == .denied || status == .restricted }
 

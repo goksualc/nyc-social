@@ -24,13 +24,9 @@ targets:
     platform: iOS
     sources:
       - path: Along
-        excludes: ["Resources/Info.plist", "Resources/Along.entitlements"]
+        excludes: ["Resources/Info.plist"]
     dependencies:
       - package: Supabase
-    entitlements:
-      path: Along/Resources/Along.entitlements
-      properties:
-        com.apple.developer.applesignin: [Default]
     info:
       path: Along/Resources/Info.plist
       properties:
@@ -39,7 +35,11 @@ targets:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiredDeviceCapabilities: [arm64]
-        NSLocationWhenInUseUsageDescription: Along uses your approximate location to centre the map on you. It is never shared with other people.
+        UIAppFonts: [SlashSignature-Regular.ttf, Roboto-Regular.ttf, Roboto-Medium.ttf, Roboto-Bold.ttf]
+        NSLocationWhenInUseUsageDescription: Along uses your location to show nearby walks and, only during a walk you both start, to share your position with your walking buddy. It is never public.
+        NSLocationTemporaryUsageDescriptionDictionary:
+          LiveWalk: Precise location lets your walking buddy see where you are on the map while you walk together. It stops when the walk ends or you stop sharing.
+        UIBackgroundModes: [location]
         ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
           - CFBundleURLName: com.along.app.auth

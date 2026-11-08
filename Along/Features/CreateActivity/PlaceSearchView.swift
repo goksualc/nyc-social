@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Searchable, Manhattan-only place picker.
+/// Searchable place picker for all five boroughs.
 struct PlaceSearchView: View {
-    let mode: PlaceSearchModel.Mode
     let title: String
     let onSelect: (Place) -> Void
 
@@ -13,11 +12,10 @@ struct PlaceSearchView: View {
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(mode: PlaceSearchModel.Mode, title: String, onSelect: @escaping (Place) -> Void) {
-        self.mode = mode
+    init(title: String, onSelect: @escaping (Place) -> Void) {
         self.title = title
         self.onSelect = onSelect
-        _model = State(initialValue: PlaceSearchModel(mode: mode))
+        _model = State(initialValue: PlaceSearchModel())
     }
 
     var body: some View {
@@ -25,7 +23,7 @@ struct PlaceSearchView: View {
             VStack(spacing: 0) {
                 HStack(spacing: AlongSpacing.xs) {
                     Image(systemName: "magnifyingglass").foregroundStyle(AlongColor.textSecondary)
-                    TextField(mode == .cafes ? "Search cafés in Manhattan" : "Search streets and places in Manhattan", text: $query)
+                    TextField("Search streets, parks and places in NYC", text: $query)
                         .focused($focused)
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
@@ -53,7 +51,7 @@ struct PlaceSearchView: View {
                 }
 
                 if model.suggestions.isEmpty {
-                    Text(query.isEmpty ? "Try “72nd”, “Bryant Park” or “West Village”." : (model.isSearching ? "" : "No matches in Manhattan."))
+                    Text(query.isEmpty ? "Try “Prospect Park”, “Astoria” or “72nd”." : (model.isSearching ? "" : "No matches in New York City."))
                         .font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
                         .frame(maxWidth: .infinity).padding(AlongSpacing.xl)
                     Spacer()
@@ -80,7 +78,12 @@ struct PlaceSearchView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } } }
             .onChange(of: query) { _, q in error = nil; model.search(q) }
-            .onAppear { focused = true }
+            // Focus once the sheet has finished presenting. Grabbing the keyboard mid-transition (this sheet opens on top
+            // of another sheet) can leave the field showing a cursor with no keyboard.
+            .task {
+                try? await Task.sleep(for: .milliseconds(450))
+                focused = true
+            }
         }
     }
 
@@ -92,7 +95,7 @@ struct PlaceSearchView: View {
             defer { isResolving = false }
             do {
                 let place = try await model.resolve(suggestion)
-                guard ManhattanGeo.contains(place.coordinate) else { throw AlongError.outsideManhattan }
+                guard NYCGeo.contains(place.coordinate) else { throw AlongError.outsideNYC }
                 onSelect(place)
                 dismiss()
             } catch {

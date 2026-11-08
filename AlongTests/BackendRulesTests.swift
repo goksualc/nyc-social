@@ -13,12 +13,11 @@ final class BackendRulesTests: XCTestCase {
 
     func testPublicActivitiesAreRedactedForNonMembers() async throws {
         let snap = try await backend().loadSnapshot()
-        let soho = snap.activities.first { $0.id == "act-soho" }!
-        XCTAssertFalse(soho.hasPreciseAccess)
-        XCTAssertEqual(soho.meetingDetails, "")
-        XCTAssertEqual(soho.cowork?.venue.name, "", "venue name is withheld")
-        let exact = SeedData.make(now: .now).activities.first { $0.id == "act-soho" }!.cowork!.venue.coordinate
-        XCTAssertNotEqual(soho.cowork?.venue.coordinate, exact)
+        let chelsea = snap.activities.first { $0.id == "act-chelsea" }!
+        XCTAssertFalse(chelsea.hasPreciseAccess)
+        XCTAssertEqual(chelsea.meetingDetails, "")
+        let exact = SeedData.make(now: .now).activities.first { $0.id == "act-chelsea" }!.walk.from.coordinate
+        XCTAssertNotEqual(chelsea.walk.from.coordinate, exact, "exact start is withheld")
         let mine = snap.activities.first { $0.id == "act-midtown" }!
         XCTAssertTrue(mine.hasPreciseAccess)
         XCTAssertFalse(mine.meetingDetails.isEmpty)
@@ -60,32 +59,43 @@ final class BackendRulesTests: XCTestCase {
     }
 
     func testBlockingHidesPlansRequestsAndChats() async throws {
-        let snap = try await backend().block(userID: "alex")
-        XCTAssertFalse(snap.activities.contains { $0.hostID == "alex" })
-        XCTAssertFalse(snap.requests.contains { $0.activityID == "act-soho" })
+        let snap = try await backend().block(userID: "maya")
+        XCTAssertFalse(snap.activities.contains { $0.hostID == "maya" })
+        let careers = try await backend().block(userID: "emma")
+        XCTAssertFalse(careers.requests.contains { $0.activityID == "act-careers" })
         let snap2 = try await backend().block(userID: "emma")
         XCTAssertFalse(snap2.requests.contains { $0.requesterID == "emma" })
         let snap3 = try await backend().block(userID: "priya")
         XCTAssertFalse(snap3.conversations.contains { $0.participantIDs.contains("priya") })
     }
 
-    func testCreateValidatesManhattanAndTimes() async throws {
+    func testCreateValidatesCityAndTimes() async throws {
         let b = backend()
-        let manhattan = ManhattanGeo.street(40)
-        let brooklyn = Place(name: "Prospect Park", area: "", coordinate: .init(40.6602, -73.9690))
-        func draft(_ d: ActivityDetails, start: Date = .now.addingTimeInterval(3600)) -> ActivityDraft {
-            ActivityDraft(title: "t", details: d, startDate: start, endDate: start.addingTimeInterval(3600),
+        let manhattan = NYCGeo.street(40)
+        let jerseyCity = Place(name: "Liberty State Park", area: "", coordinate: .init(40.7108, -74.0536))
+        func draft(_ w: WalkInfo, start: Date = .now.addingTimeInterval(3600)) -> ActivityDraft {
+            ActivityDraft(title: "t", walk: w, startDate: start, endDate: start.addingTimeInterval(3600),
                           visibility: .public, capacity: 2, note: "", meetingDetails: "")
         }
-        do { _ = try await b.createActivity(draft(.cowork(.init(venue: brooklyn, style: .social)))); XCTFail() } catch AlongError.outsideManhattan {}
-        do { _ = try await b.createActivity(draft(.cowork(.init(venue: manhattan, style: .social)), start: .now.addingTimeInterval(-7200))); XCTFail() } catch AlongError.startInPast {}
-        let snap = try await b.createActivity(draft(.walk(.init(from: ManhattanGeo.street(40), to: ManhattanGeo.street(60), pace: .fast))))
-        XCTAssertEqual(snap.activities.count, SeedData.make(now: .now).activities.count + 1)
+        do { _ = try await b.createActivity(draft(.init(from: jerseyCity, to: manhattan, pace: .casual))); XCTFail() } catch AlongError.outsideNYC {}
+        do { _ = try await b.createActivity(draft(.init(from: manhattan, to: NYCGeo.street(60), pace: .casual), start: .now.addingTimeInterval(-7200))); XCTFail() } catch AlongError.startInPast {}
+        // Any two places in the five boroughs work, including across the East River.
+        let park = Place(name: "Prospect Park", area: "Prospect Park", coordinate: .init(40.6602, -73.9690))
+        let zoo = Place(name: "Bronx Zoo", area: "Bronx Zoo", coordinate: .init(40.8506, -73.8770))
+        let ferry = Place(name: "St. George", area: "St. George", coordinate: .init(40.6437, -74.0735))
+        for (a, c) in [(park, manhattan), (manhattan, zoo), (ferry, park)] { _ = try await b.createActivity(draft(.init(from: a, to: c, pace: .casual))) }
+        let snap = try await b.createActivity(draft(.init(from: NYCGeo.street(40), to: NYCGeo.street(60), pace: .fast)))
+        XCTAssertEqual(snap.activities.count, SeedData.make(now: .now).activities.count + 4)
+        // The optional "What's on your mind?" prompt is kept, trimmed.
+        var withPrompt = draft(.init(from: NYCGeo.street(40), to: NYCGeo.street(60), pace: .fast))
+        withPrompt.mindPrompt = "  Life, work, random thoughts  "
+        let snap2 = try await b.createActivity(withPrompt)
+        XCTAssertEqual(snap2.activities.filter { $0.mindPrompt == "Life, work, random thoughts" }.count, 1)
     }
 
     func testPrivatePlansAreCreatedButNeverDiscoverable() async throws {
         let b = backend()
-        let d = ActivityDraft(title: "Private", details: .cowork(.init(venue: ManhattanGeo.cafes[0], style: .deepWork)),
+        let d = ActivityDraft(title: "Private", walk: .init(from: NYCGeo.street(40), to: NYCGeo.street(60), pace: .casual),
                               startDate: .now.addingTimeInterval(3600), endDate: .now.addingTimeInterval(7200),
                               visibility: .private, capacity: 1, note: "", meetingDetails: "")
         let snap = try await b.createActivity(d)
@@ -104,21 +114,29 @@ final class BackendRulesTests: XCTestCase {
     }
 
     func testDemoHostAcceptsPendingRequest() async {
-        let snap = await backend().simulateHostResponse(activityID: "act-soho")
-        XCTAssertEqual(snap.requests.first { $0.id == "req-me-soho" }?.status, .accepted)
-        XCTAssertTrue(snap.activities.first { $0.id == "act-soho" }!.hasPreciseAccess)
+        let snap = await backend().simulateHostResponse(activityID: "act-careers")
+        XCTAssertEqual(snap.requests.first { $0.id == "req-me-careers" }?.status, .accepted)
+        XCTAssertTrue(snap.activities.first { $0.id == "act-careers" }!.hasPreciseAccess)
     }
 }
 
 final class GeoAndTimeTests: XCTestCase {
-    func testManhattanBoundary() {
-        XCTAssertTrue(ManhattanGeo.contains(.init(40.7580, -73.9855)))   // Times Square
-        XCTAssertTrue(ManhattanGeo.contains(.init(40.7794, -73.9632)))   // The Met
-        XCTAssertTrue(ManhattanGeo.contains(.init(40.7358, -74.0036)))   // West Village
-        XCTAssertFalse(ManhattanGeo.contains(.init(40.6782, -73.9442)))  // Brooklyn
-        XCTAssertFalse(ManhattanGeo.contains(.init(40.7282, -73.7949)))  // Queens
-        XCTAssertFalse(ManhattanGeo.contains(.init(40.7178, -74.0431)))  // Jersey City
-        for p in SeedData.make(now: .now).activities { XCTAssertTrue(ManhattanGeo.contains(Coordinate(p.mapCoordinate)), p.title) }
+    func testCityBoundary() {
+        XCTAssertTrue(NYCGeo.contains(.init(40.7580, -73.9855)))   // Times Square
+        XCTAssertTrue(NYCGeo.contains(.init(40.7794, -73.9632)))   // The Met
+        XCTAssertTrue(NYCGeo.contains(.init(40.7358, -74.0036)))   // West Village
+        for (name, c) in [("Brooklyn", Coordinate(40.6782, -73.9442)), ("Queens", Coordinate(40.7282, -73.7949)), ("Coney Island", Coordinate(40.5755, -73.9707)),
+                          ("The Bronx", Coordinate(40.8296, -73.9262)), ("Staten Island", Coordinate(40.5795, -74.1502)), ("Rockaway", Coordinate(40.5834, -73.8160))] {
+            XCTAssertTrue(NYCGeo.contains(c), name)
+        }
+        XCTAssertEqual(NYCGeo.borough(of: .init(40.7580, -73.9855)), "Manhattan")
+        XCTAssertEqual(NYCGeo.borough(of: .init(40.5795, -74.1502)), "Staten Island")
+        XCTAssertFalse(NYCGeo.contains(.init(40.7178, -74.0431)))  // Jersey City
+        XCTAssertFalse(NYCGeo.contains(.init(40.7357, -74.1724)))  // Newark
+        XCTAssertFalse(NYCGeo.contains(.init(40.9312, -73.8987)))  // Yonkers
+        XCTAssertFalse(NYCGeo.contains(.init(40.7062, -73.6187)))  // Hempstead
+        XCTAssertFalse(NYCGeo.contains(.init(40.3000, -73.9000)))  // open ocean
+        for p in SeedData.make(now: .now).activities { XCTAssertTrue(NYCGeo.contains(Coordinate(p.mapCoordinate)), p.title) }
     }
 
     func testApproximateCoordinateIsCoarse() {
@@ -128,9 +146,9 @@ final class GeoAndTimeTests: XCTestCase {
     }
 
     func testStreetsAndOrdinals() {
-        XCTAssertEqual(ManhattanGeo.ordinal(72), "72nd"); XCTAssertEqual(ManhattanGeo.ordinal(11), "11th")
-        XCTAssertEqual(ManhattanGeo.street(55).name, "55th St")
-        XCTAssertEqual(ManhattanGeo.suggestions(matching: "72").first?.name, "72nd St")
+        XCTAssertEqual(NYCGeo.ordinal(72), "72nd"); XCTAssertEqual(NYCGeo.ordinal(11), "11th")
+        XCTAssertEqual(NYCGeo.street(55).name, "55th St")
+        XCTAssertEqual(NYCGeo.suggestions(matching: "72").first?.name, "72nd St")
     }
 
     func testTimeFormatting() {
@@ -146,5 +164,28 @@ final class GeoAndTimeTests: XCTestCase {
         let pm = cal.date(from: DateComponents(year: 2026, month: 10, day: 30, hour: 15))!
         XCTAssertEqual(ActivityTime.day(am, now: now), "Fri")
         XCTAssertTrue(ActivityTime.range(am, pm).contains("11"), ActivityTime.range(am, pm))
+    }
+}
+
+final class CityGazetteerTests: XCTestCase {
+    func testEveryNamedPlaceIsInsideTheCity() {
+        for p in NYCGeo.landmarks { XCTAssertTrue(NYCGeo.contains(p.coordinate), "landmark \(p.name)") }
+        for n in NYCGeo.neighborhoods { XCTAssertTrue(NYCGeo.contains(n.coordinate), "neighborhood \(n.name)") }
+        for p in SeedData.make(now: .now).activities {
+            XCTAssertTrue(NYCGeo.contains(p.walk.from.coordinate) && NYCGeo.contains(p.walk.to.coordinate), p.title)
+        }
+    }
+
+    func testEveryBoroughHasNeighborhoodsAndLandmarksToSearch() {
+        let boroughs = Set(NYCGeo.landmarks.compactMap { NYCGeo.borough(of: $0.coordinate) })
+        XCTAssertEqual(boroughs, ["Manhattan", "Brooklyn", "Queens", "The Bronx", "Staten Island"])
+        XCTAssertEqual(NYCGeo.suggestions(matching: "prospect").first?.name, "Prospect Park (Brooklyn)")
+        XCTAssertFalse(NYCGeo.suggestions(matching: "astoria").isEmpty)
+        XCTAssertFalse(NYCGeo.suggestions(matching: "snug").isEmpty)
+    }
+
+    @MainActor func testCameraFacesGridOnlyInManhattan() {
+        XCTAssertEqual(ExploreViewModel.heading(near: .init(40.7580, -73.9855)), ExploreViewModel.gridHeading)
+        XCTAssertEqual(ExploreViewModel.heading(near: .init(40.6602, -73.9690)), 0)
     }
 }

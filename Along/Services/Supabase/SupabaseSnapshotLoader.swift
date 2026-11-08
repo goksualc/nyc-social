@@ -7,7 +7,9 @@ struct SupabaseSnapshotLoader: Sendable {
     let manager: SupabaseManager
     let settings = LocalSettingsStore()
 
-    static let profileColumns = "id, username, display_name, bio, avatar_url, interests, looking_for, visibility"
+    static let profileColumns = "id, username, display_name, bio, avatar_url, visibility, hobbies, instagram_username, x_username, occupation, university, languages, favorite_neighborhoods, preferred_pace, preferred_duration, favorite_mode, discussion_topics, conversation_custom"
+    /// Used when migration 7 hasn't been applied yet, so signing in still works.
+    static let legacyProfileColumns = "id, username, display_name, bio, avatar_url, visibility"
     static let messageColumns = "id, conversation_id, sender_id, content, created_at"
     private var db: PostgrestClient { manager.client.schema("public") }
 
@@ -28,8 +30,11 @@ struct SupabaseSnapshotLoader: Sendable {
         let (me, cards_, requests_, conversations_, messages_, blocks_) =
             try await (profile, cards, requestRows, conversationRows, messageRows, blockRows)
 
-        var activities = cards_.map { $0.activity() }
-        let requests = requests_.map(\.request)
+        // Retired cowork plans stay in the database but are not part of the app any more.
+        let walkCards = cards_.filter { $0.type == "walk" }
+        var activities = walkCards.map { $0.activity() }
+        let known = Set(activities.map(\.id))
+        let requests = requests_.map(\.request).filter { known.contains($0.activityID) }
 
         // Hosts see who is going; everyone else only gets the count from the server.
         for i in activities.indices {
@@ -41,7 +46,7 @@ struct SupabaseSnapshotLoader: Sendable {
         }
 
         // Exact places + meeting details, only for plans I host or have been accepted into.
-        let preciseIDs = cards_.filter { $0.viewerIsCreator || $0.viewerIsParticipant }.map(\.id)
+        let preciseIDs = walkCards.filter { $0.viewerIsCreator || $0.viewerIsParticipant }.map(\.id)
         if !preciseIDs.isEmpty {
             let details: [PrivateDetailsRow] = try await db
                 .rpc("get_private_activity_details", params: ["p_activity_ids": preciseIDs]).execute().value
@@ -55,22 +60,29 @@ struct SupabaseSnapshotLoader: Sendable {
         wanted.formUnion(conversations_.flatMap { $0.conversationParticipants.map(\.userId) })
         wanted.remove(uid)
         var people: [ID: User] = [:]
-        for card in cards_ { people[card.creatorId] = card.host }
+        for card in walkCards { people[card.creatorId] = card.host }
         if !wanted.isEmpty {
-            let rows: [ProfileRow] = try await db.from("profiles").select(Self.profileColumns)
-                .in("id", values: Array(wanted)).execute().value
+            let rows: [ProfileRow]
+            do {
+                rows = try await db.from("profiles").select(Self.profileColumns).in("id", values: Array(wanted)).execute().value
+            } catch {
+                rows = try await db.from("profiles").select(Self.legacyProfileColumns).in("id", values: Array(wanted)).execute().value
+            }
             for row in rows { people[row.id] = row.user }
         }
+        // Ages exist only for people who chose to show them; failure just means no age is shown.
+        let ages: [AgeRow] = (try? await db.rpc("profile_ages", params: ["p_ids": Array(people.keys)]).execute().value) ?? []
+        for age in ages { people[age.id]?.age = age.age }
         for block in blocks_ where people[block.blockedId] == nil {
             people[block.blockedId] = User(id: block.blockedId, firstName: block.blockedDisplayName ?? "Blocked user",
-                                           bio: "", interests: [], alongFor: [])
+                                           bio: "", hobbies: [])
         }
 
         var local = settings.load(for: uid)
         local.profileVisibility = me.visibility
         return AlongSnapshot(
             me: me.user, settings: local, users: Array(people.values), activities: activities, requests: requests,
-            conversations: conversations_.map(\.conversation), messages: messages_.reversed().map(\.message),
+            conversations: conversations_.map(\.conversation).filter { known.contains($0.activityID) }, messages: messages_.reversed().map(\.message),
             blockedUserIDs: Set(blocks_.map(\.blockedId)))
     }
 }

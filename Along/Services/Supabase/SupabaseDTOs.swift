@@ -12,18 +12,33 @@ struct ProfileRow: Decodable {
     var displayName: String?
     var bio: String?
     var avatarUrl: String?
-    var interests: [String]?
-    var lookingFor: [String]?
     var visibility: String?
     var ageConfirmedAt: Date?
+    var hobbies: [String]?
+    var instagramUsername: String?
+    var xUsername: String?
+    var occupation: String?
+    var university: String?
+    var languages: [String]?
+    var favoriteNeighborhoods: [String]?
+    var preferredPace: String?
+    var preferredDuration: Int?
+    var discussionTopics: [String]?
+    var conversationCustom: [String]?
 
     var user: User {
-        User(id: id, firstName: displayName ?? "Someone", bio: bio ?? "",
-             interests: (interests ?? []).compactMap(Interest.init(dbValue:)),
-             alongFor: Set((lookingFor ?? []).compactMap(AlongPurpose.init(dbValue:))),
-             avatarTone: tone(for: id), avatarPath: avatarUrl)
+        User(id: id, firstName: displayName ?? "Someone", bio: bio ?? "", hobbies: hobbies ?? [],
+             avatarTone: tone(for: id), avatarPath: avatarUrl,
+             occupation: occupation, university: university, languages: languages ?? [],
+             instagram: instagramUsername, xHandle: xUsername,
+             pacePreference: preferredPace.flatMap(PacePreference.init(dbValue:)), preferredDuration: preferredDuration,
+             favoriteNeighborhoods: favoriteNeighborhoods ?? [],
+             discussionTopics: (discussionTopics ?? []).compactMap(ConversationTopic.init(dbValue:)),
+             conversationCustom: conversationCustom ?? [])
     }
 }
+
+struct AgeRow: Decodable { var id: String; var age: Int }
 
 struct ActivityCardRow: Decodable {
     var id: String
@@ -44,40 +59,39 @@ struct ActivityCardRow: Decodable {
     var startLabel: String?
     var endLabel: String?
     var pace: String?
-    var workStyle: String?
     var startLng: Double?
     var startLat: Double?
     var endLng: Double?
     var endLat: Double?
     var viewerIsCreator: Bool
     var viewerIsParticipant: Bool
+    var hostAnonymous: Bool?
+    var hostInterests: [String]?
+    var mindPrompt: String?
 
     /// Public, approximate view of the activity (what anyone may see).
     func activity() -> Activity {
-        let area = publicArea ?? "Manhattan"
+        let area = publicArea ?? "New York City"
         let start = Coordinate(startLat ?? 0, startLng ?? 0)
-        let details: ActivityDetails
-        if type == "walk" {
-            let end = Coordinate(endLat ?? start.latitude, endLng ?? start.longitude)
-            details = .walk(WalkInfo(
-                from: Place(name: startLabel ?? area, area: area, coordinate: start, isStreet: true),
-                to: Place(name: endLabel ?? area, area: area, coordinate: end, isStreet: true),
-                pace: Pace(rawValue: (pace ?? "casual").capitalized) ?? .casual))
-        } else {
-            details = .cowork(CoworkInfo(
-                venue: Place(name: "", area: area, coordinate: start),
-                style: WorkStyle(dbValue: workStyle ?? "") ?? .deepWork))
-        }
+        let end = Coordinate(endLat ?? start.latitude, endLng ?? start.longitude)
+        let walk = WalkInfo(
+            from: Place(name: startLabel ?? area, area: area, coordinate: start, isStreet: true),
+            to: Place(name: endLabel ?? area, area: area, coordinate: end, isStreet: true),
+            pace: Pace(rawValue: (pace ?? "casual").capitalized) ?? .casual)
         return Activity(
-            id: id, title: title, hostID: creatorId, details: details, startDate: startTime, endDate: endTime,
+            id: id, title: title, hostID: creatorId, walk: walk, startDate: startTime, endDate: endTime,
             visibility: Visibility(rawValue: visibility.capitalized) ?? .public, capacity: maxParticipants,
             participantIDs: [], participantCount: participantCount, note: description,
-            meetingDetails: "", hasPreciseAccess: false, isCancelled: status == "cancelled", createdAt: createdAt)
+            meetingDetails: "", hasPreciseAccess: false, isCancelled: status == "cancelled", createdAt: createdAt,
+            hostAnonymous: hostAnonymous ?? false, hostInterests: hostInterests ?? [],
+            mindPrompt: mindPrompt.flatMap { $0.isEmpty ? nil : $0 })
     }
 
     /// Minimal host identity from the card, for hosts whose full profile isn't readable.
     var host: User {
-        User(id: creatorId, firstName: hostName, bio: "", interests: [], alongFor: [],
+        // A hidden organizer arrives as an opaque alias with no name or photo; keep it that way.
+        if (hostAnonymous ?? false) && User.isAlias(creatorId) { return .anonymousHost(id: creatorId, interests: hostInterests ?? []) }
+        return User(id: creatorId, firstName: hostName, bio: "", hobbies: [],
              avatarTone: tone(for: creatorId), avatarPath: hostAvatarPath)
     }
 }
@@ -98,18 +112,9 @@ struct PrivateDetailsRow: Decodable {
     func apply(to activity: inout Activity) {
         activity.hasPreciseAccess = true
         activity.meetingDetails = meetingDetails ?? ""
-        switch activity.details {
-        case .walk(var w):
-            if let lat = startLat, let lng = startLng { w.from.coordinate = Coordinate(lat, lng) }
-            if let lat = endLat, let lng = endLng { w.to.coordinate = Coordinate(lat, lng) }
-            activity.details = .walk(w)
-            activity.routeCoordinates = (routeCoordinates ?? []).compactMap { $0.count >= 2 ? Coordinate($0[1], $0[0]) : nil }
-        case .cowork(var c):
-            if let lat = startLat, let lng = startLng { c.venue.coordinate = Coordinate(lat, lng) }
-            c.venue.name = cafeName ?? ""
-            c.venue.address = address
-            activity.details = .cowork(c)
-        }
+        if let lat = startLat, let lng = startLng { activity.walk.from.coordinate = Coordinate(lat, lng) }
+        if let lat = endLat, let lng = endLng { activity.walk.to.coordinate = Coordinate(lat, lng) }
+        activity.routeCoordinates = (routeCoordinates ?? []).compactMap { $0.count >= 2 ? Coordinate($0[1], $0[0]) : nil }
     }
 }
 
@@ -170,16 +175,8 @@ struct CreateWalkParams: Encodable {
     var pStartLng: Double, pStartLat: Double, pEndLng: Double, pEndLat: Double
     var pRoute: [[Double]]?
     var pMeetingDetails: String
-}
-
-struct CreateCoworkParams: Encodable {
-    var pTitle: String, pDescription: String, pStartTime: Date, pEndTime: Date
-    var pMaxParticipants: Int, pVisibility: String, pWorkStyle: String
-    // Not optional: Swift omits nil keys, and PostgREST matches functions by the exact set of argument names.
-    // The server stores '' as NULL.
-    var pCafeName: String, pAddress: String, pLng: Double, pLat: Double
-    var pPlaceIdentifier: String
-    var pMeetingDetails: String
+    // Not optional: PostgREST matches by the exact argument set. The server stores '' as no value.
+    var pAnonymousHost: Bool, pHostInterests: [String], pMindPrompt: String
 }
 
 struct UpdateActivityParams: Encodable {
@@ -204,18 +201,91 @@ struct CompleteProfileParams: Encodable {
     var pDisplayName: String, pBio: String, pInterests: [String], pLookingFor: [String], pConfirmAge: Bool
 }
 
+struct RouteSearchParams: Encodable {
+    var pRoute: [[Double]], pCorridorM: Double
+    var pFrom: Date?, pTo: Date?, pWhen: Date?
+    var pLimit: Int
+}
+
+struct RouteMatchRow: Decodable {
+    var card: ActivityCardRow
+    var overlapPct: Double, routeDistanceM: Double, directionDiffDeg: Double
+    var startsNear: Bool, endsNear: Bool, score: Double
+
+    func match() -> RouteMatch {
+        RouteMatch(activity: card.activity(), host: card.host, overlap: overlapPct, routeDistanceMeters: routeDistanceM,
+                   directionDiffDegrees: directionDiffDeg, startsNear: startsNear, endsNear: endsNear, score: score)
+    }
+}
+
 struct ProfileUpdate: Encodable {
-    var displayName: String, bio: String, interests: [String], lookingFor: [String], avatarUrl: String?
+    var displayName: String, bio: String, hobbies: [String]
+    var instagramUsername: String?, xUsername: String?, occupation: String?, university: String?
+    var languages: [String]
+    var favoriteNeighborhoods: [String], preferredPace: String?, preferredDuration: Int?
+    var discussionTopics: [String], conversationCustom: [String]
     var visibility: String?
-    enum CodingKeys: String, CodingKey { case displayName, bio, interests, lookingFor, avatarUrl, visibility }
+    enum CodingKeys: String, CodingKey {
+        case displayName, bio, hobbies, instagramUsername, xUsername, occupation, university, languages
+        case favoriteNeighborhoods, preferredPace, preferredDuration, discussionTopics, conversationCustom
+        case visibility
+    }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(displayName, forKey: .displayName)
         try c.encode(bio, forKey: .bio)
-        try c.encode(interests, forKey: .interests)
-        try c.encode(lookingFor, forKey: .lookingFor)
-        try c.encode(avatarUrl, forKey: .avatarUrl)            // explicit null clears the photo
+        try c.encode(hobbies, forKey: .hobbies)
+        // Explicit nulls clear an optional field.
+        try c.encode(instagramUsername, forKey: .instagramUsername)
+        try c.encode(xUsername, forKey: .xUsername)
+        try c.encode(occupation, forKey: .occupation)
+        try c.encode(university, forKey: .university)
+        try c.encode(languages, forKey: .languages)
+        try c.encode(favoriteNeighborhoods, forKey: .favoriteNeighborhoods)
+        try c.encode(preferredPace, forKey: .preferredPace)
+        try c.encode(preferredDuration, forKey: .preferredDuration)
+        try c.encode(discussionTopics, forKey: .discussionTopics)
+        try c.encode(conversationCustom, forKey: .conversationCustom)
         try c.encodeIfPresent(visibility, forKey: .visibility)
+    }
+}
+
+/// The photo only. Kept separate so changing it can never rewrite (or fail because of) any other profile field,
+/// and saving the profile form can never put an old photo back.
+struct AvatarUpdate: Encodable {
+    var avatarUrl: String?
+    enum CodingKeys: String, CodingKey { case avatarUrl }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(avatarUrl, forKey: .avatarUrl)          // explicit null clears the photo
+    }
+}
+
+enum AvatarStoragePath {
+    /// `<lowercase user id>/avatar-<unix ms>.jpg`
+    static func make(userID: String, now: Date = .now) -> String {
+        "\(userID.lowercased())/avatar-\(Int64(now.timeIntervalSince1970 * 1000)).jpg"
+    }
+}
+
+/// First-run extras written once, at the end of onboarding.
+struct OnboardingUpdate: Encodable {
+    var instagramUsername: String?, xUsername: String?
+    var hobbies: [String]
+    var preferredPace: String?, preferredDuration: Int?, favoriteNeighborhoods: [String]
+    var birthday: String?
+    enum CodingKeys: String, CodingKey {
+        case instagramUsername, xUsername, hobbies, preferredPace, preferredDuration, favoriteNeighborhoods, birthday
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(instagramUsername, forKey: .instagramUsername)
+        try c.encode(xUsername, forKey: .xUsername)
+        try c.encode(hobbies, forKey: .hobbies)
+        try c.encode(preferredPace, forKey: .preferredPace)
+        try c.encode(preferredDuration, forKey: .preferredDuration)
+        try c.encode(favoriteNeighborhoods, forKey: .favoriteNeighborhoods)
+        try c.encodeIfPresent(birthday, forKey: .birthday)
     }
 }
 

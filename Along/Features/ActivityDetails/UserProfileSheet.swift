@@ -7,6 +7,7 @@ struct UserProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showReport = false
     @State private var confirmBlock = false
+    @State private var stats: WalkStats?
 
     var body: some View {
         NavigationStack {
@@ -14,29 +15,8 @@ struct UserProfileSheet: View {
                 if let user = store.user(userID) {
                     ScrollView {
                         VStack(spacing: AlongSpacing.lg) {
-                            VStack(spacing: AlongSpacing.sm) {
-                                AlongProfileAvatar(user: user, size: 104)
-                                Text(user.firstName).font(AlongFont.screenTitle).foregroundStyle(AlongColor.textPrimary)
-                                Text(user.neighborhood).font(AlongFont.subhead).foregroundStyle(AlongColor.textTertiary)
-                            }
-                            .padding(.top, AlongSpacing.md)
-
-                            Text(user.bio)
-                                .font(AlongFont.body).foregroundStyle(AlongColor.textPrimary).multilineTextAlignment(.center)
-
-                            VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                                AlongSectionLabel("Interests")
-                                FlowLayout(spacing: 8) { ForEach(user.interests) { AlongChip(title: $0.rawValue) } }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                            VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                                AlongSectionLabel("Along for")
-                                FlowLayout(spacing: 8) {
-                                    ForEach(AlongPurpose.allCases.filter { user.alongFor.contains($0) }) { AlongChip(title: $0.rawValue) }
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            DetailedProfileView(user: user, stats: stats, isMine: user.id == store.me.id)
+                                .padding(.top, AlongSpacing.md)
 
                             if user.id != store.me.id {
                                 AlongDivider()
@@ -54,6 +34,7 @@ struct UserProfileSheet: View {
                 }
             }
             .alongScreenBackground()
+            .task { stats = try? await store.walks.publicStats(userID: userID) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }.foregroundStyle(AlongColor.navy) }
             }

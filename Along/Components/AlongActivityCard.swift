@@ -15,8 +15,8 @@ struct AlongActivityCard: View {
         VStack(alignment: .leading, spacing: AlongSpacing.sm) {
             HStack(spacing: AlongSpacing.xs) {
                 HStack(spacing: 5) {
-                    Image(systemName: activity.kind.symbol).font(.system(size: 11, weight: .semibold))
-                    Text(activity.kind.label).font(AlongFont.label)
+                    Image(systemName: "figure.walk").font(.system(size: 11, weight: .semibold))
+                    Text("Walk").font(AlongFont.label)
                 }
                 .foregroundStyle(AlongColor.navy)
                 .padding(.horizontal, 10).padding(.vertical, 5)
@@ -33,7 +33,7 @@ struct AlongActivityCard: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(activity.title)
-                    .font(AlongFont.headline)
+                    .font(AlongFont.walkCardTitle)
                     .foregroundStyle(AlongColor.textPrimary)
                     .multilineTextAlignment(.leading)
                 Text(activity.publicLocationLabel)

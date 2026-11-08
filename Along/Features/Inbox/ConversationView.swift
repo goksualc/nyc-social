@@ -36,6 +36,9 @@ final class ConversationViewModel {
         if await !store.send(text, in: c) && draft.isEmpty { draft = text }
     }
 
+    /// Opening (or watching) a chat marks it read, which clears its unread dot in the inbox.
+    func markRead() { if let c = conversation { store.markRead(c) } }
+
     var canLoadEarlier: Bool { conversation.map(store.canLoadEarlier) ?? false }
     func loadLatest() async { if let c = conversation { await store.loadHistory(for: c, older: false) } }
     func loadEarlier() async { if let c = conversation { await store.loadHistory(for: c, older: true) } }
@@ -44,6 +47,7 @@ final class ConversationViewModel {
 private struct ConversationContent: View {
     @State private var vm: ConversationViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(TabChrome.self) private var chrome
     @FocusState private var focused: Bool
 
     init(store: AppStore, conversationID: ID) {
@@ -54,9 +58,12 @@ private struct ConversationContent: View {
         VStack(spacing: 0) {
             if let a = vm.activity { planBanner(a) }
             messageList
-            composer
         }
+        // The composer is anchored to the bottom safe area, so it rides above the keyboard and the home indicator.
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .alongScreenBackground()
+        .onAppear { chrome.chatAppeared() }
+        .onDisappear { chrome.chatDisappeared() }
         .navigationTitle(vm.other?.firstName ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -79,7 +86,7 @@ private struct ConversationContent: View {
     private func planBanner(_ a: Activity) -> some View {
         NavigationLink(value: AlongRoute.activity(a.id)) {
             HStack(spacing: AlongSpacing.sm) {
-                Image(systemName: a.kind.symbol).font(.system(size: 14)).foregroundStyle(AlongColor.navy)
+                Image(systemName: "figure.walk").font(.system(size: 14)).foregroundStyle(AlongColor.navy)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(a.title).font(AlongFont.subheadEmphasis).foregroundStyle(AlongColor.textPrimary)
                     Text(ActivityTime.summary(a, now: vm.store.now)).font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
@@ -128,8 +135,8 @@ private struct ConversationContent: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .task { await vm.loadLatest() }
-            .onAppear { scrollToEnd(proxy, animated: false) }
-            .onChange(of: vm.messages.count) { scrollToEnd(proxy, animated: true) }
+            .onAppear { scrollToEnd(proxy, animated: false); vm.markRead() }
+            .onChange(of: vm.messages.count) { scrollToEnd(proxy, animated: true); vm.markRead() }
             .onChange(of: focused) { if focused { scrollToEnd(proxy, animated: true) } }
         }
     }

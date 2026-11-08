@@ -8,9 +8,22 @@ import CoreLocation
 /// (Postgres RLS policies / edge functions), never trusted to the client. See `SafetyPolicy`.
 actor MockAlongBackend: AlongBackend, DemoService {
     private var db: MockDatabase
+    fileprivate var walkSessions: [WalkSession] = []
+    /// In-memory photo storage, used when avatars are switched on (tests). Demo mode keeps them off, like before.
+    private var storedAvatars: [String: Data] = [:]
+    let avatarsEnabled: Bool
+    /// Test hooks: make the next steps of a photo change fail.
+    private(set) var failAvatarUpload = false
+    private(set) var failAvatarProfileUpdate = false
+    func setFailAvatarUpload(_ on: Bool) { failAvatarUpload = on }
+    func setFailAvatarProfileUpdate(_ on: Bool) { failAvatarProfileUpdate = on }
+    var storedAvatarPaths: [String] { storedAvatars.keys.sorted() }
+    fileprivate var memoryPrefs: [ID: (show: Bool, reveal: Bool)] = [:]
+    fileprivate var reportedDistance: [ID: Int] = [:]
     private let clock: @Sendable () -> Date
 
-    init(clock: @escaping @Sendable () -> Date = { .now }) {
+    init(clock: @escaping @Sendable () -> Date = { .now }, avatarsEnabled: Bool = false) {
+        self.avatarsEnabled = avatarsEnabled
         self.clock = clock
         self.db = SeedData.make(now: clock())
     }
@@ -50,16 +63,11 @@ actor MockAlongBackend: AlongBackend, DemoService {
     private func redacted(_ activity: Activity, isMember: Bool) -> Activity {
         var a = activity
         a.hasPreciseAccess = isMember
+        if a.hostAnonymous, a.hostID != me { a.hostID = User.anonymousPrefix + a.id }       // same masking the server applies, members included
         guard !isMember else { return a }
         a.meetingDetails = ""
-        switch a.details {
-        case .walk(var w):
-            w.from = w.from.redacted(); w.to = w.to.redacted()
-            a.details = .walk(w)
-        case .cowork(var c):
-            c.venue = c.venue.redacted()
-            a.details = .cowork(c)
-        }
+        a.walk.from = a.walk.from.redacted()
+        a.walk.to = a.walk.to.redacted()
         return a
     }
 
@@ -85,9 +93,8 @@ actor MockAlongBackend: AlongBackend, DemoService {
             .filter { a in
                 guard a.visibility == .public, a.isActive(at: now), a.endDate > from else { return false }
                 if let to = query.to, a.startDate >= to { return false }
-                if let kind = query.kind, a.kind != kind { return false }
-                if let (s, e) = a.routeEndpoints { return inBox(s) || inBox(e) }
-                return inBox(a.mapCoordinate)
+                let (s, e) = a.routeEndpoints
+                return inBox(s) || inBox(e)
             }
             .sorted { $0.startDate < $1.startDate }
         let page = Array(all.dropFirst(query.offset).prefix(query.limit))
@@ -95,14 +102,44 @@ actor MockAlongBackend: AlongBackend, DemoService {
         return DiscoveryPage(activities: page, hosts: db.users.filter { hostIDs.contains($0.id) }, hasMore: all.count > query.offset + page.count)
     }
 
-    func nearby(to center: Coordinate, radiusMeters: Double, kind: ActivityKind?, limit: Int) async throws -> DiscoveryPage {
+    func nearby(to center: Coordinate, radiusMeters: Double, limit: Int) async throws -> DiscoveryPage {
         let now = clock()
         let found = snapshot().activities
-            .filter { $0.visibility == .public && $0.isActive(at: now) && (kind == nil || $0.kind == kind) }
+            .filter { $0.visibility == .public && $0.isActive(at: now) }
             .filter { Coordinate($0.mapCoordinate).distance(to: center) <= radiusMeters }
             .sorted { Coordinate($0.mapCoordinate).distance(to: center) < Coordinate($1.mapCoordinate).distance(to: center) }
         let page = Array(found.prefix(limit))
         return DiscoveryPage(activities: page, hosts: [], hasMore: found.count > page.count)
+    }
+
+    func searchAlongRoute(_ q: RouteSearchQuery) async throws -> [RouteMatch] {
+        guard q.route.count >= 2 else { throw AlongError.notFound }
+        let now = clock()
+        func dist(_ p: Coordinate) -> Double { q.route.map { p.distance(to: $0) }.min() ?? .infinity }
+        func bearing(_ a: Coordinate, _ b: Coordinate) -> Double {
+            let y = sin((b.longitude - a.longitude) * .pi / 180) * cos(b.latitude * .pi / 180)
+            let x = cos(a.latitude * .pi / 180) * sin(b.latitude * .pi / 180) - sin(a.latitude * .pi / 180) * cos(b.latitude * .pi / 180) * cos((b.longitude - a.longitude) * .pi / 180)
+            return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+        }
+        let routeBearing = bearing(q.route[0], q.route[q.route.count - 1])
+        let snap = snapshot()
+        var out: [RouteMatch] = []
+        for a in snap.activities where a.visibility == .public && a.isActive(at: now) && a.endDate > (q.from ?? now) {
+            if let to = q.to, a.startDate >= to { continue }
+            let line = a.routeCoordinates.count >= 2 ? a.routeCoordinates : [a.walk.from.coordinate, a.walk.to.coordinate]
+            // sample the walk every few points and count how much of it is inside the corridor
+            let samples = stride(from: 0, to: line.count, by: max(1, line.count / 40)).map { line[$0] } + [line[line.count - 1]]
+            let inside = Double(samples.filter { dist($0) <= q.corridorMeters }.count) / Double(samples.count)
+            guard inside > 0 else { continue }
+            let diff = abs(bearing(line[0], line[line.count - 1]) - routeBearing)
+            let dir = diff > 180 ? 360 - diff : diff
+            let sNear = dist(line[0]) <= q.corridorMeters, eNear = dist(line[line.count - 1]) <= q.corridorMeters
+            let score = 0.5 * inside + 0.2 * (1 - dir / 180) + 0.15 * (sNear ? 1 : 0) + 0.15 * (eNear ? 1 : 0)
+            let host = snap.users.first { $0.id == a.hostID } ?? User.anonymousHost(id: a.hostID, interests: a.hostInterests)
+            out.append(RouteMatch(activity: a, host: host, overlap: inside, routeDistanceMeters: dist(line[0]), directionDiffDegrees: dir,
+                                  startsNear: sNear, endsNear: eNear, score: score))
+        }
+        return Array(out.sorted { $0.score > $1.score }.prefix(q.limit))
     }
 
     func updateActivity(_ edit: ActivityEdit) async throws -> AlongSnapshot {
@@ -129,17 +166,15 @@ actor MockAlongBackend: AlongBackend, DemoService {
         let now = clock()
         guard draft.startDate > now.addingTimeInterval(-60) else { throw AlongError.startInPast }
         guard draft.endDate > draft.startDate else { throw AlongError.invalidTimes }
-        switch draft.details {
-        case .walk(let w):
-            guard ManhattanGeo.contains(w.from.coordinate), ManhattanGeo.contains(w.to.coordinate) else { throw AlongError.outsideManhattan }
-            guard w.from.coordinate.distance(to: w.to.coordinate) > 50 else { throw AlongError.sameLocation }
-        case .cowork(let c):
-            guard ManhattanGeo.contains(c.venue.coordinate) else { throw AlongError.outsideManhattan }
-        }
+        let w = draft.walk
+        guard NYCGeo.contains(w.from.coordinate), NYCGeo.contains(w.to.coordinate) else { throw AlongError.outsideNYC }
+        guard w.from.coordinate.distance(to: w.to.coordinate) > 50 else { throw AlongError.sameLocation }
         let activity = Activity(
-            id: UUID().uuidString, title: draft.title, hostID: me, details: draft.details,
-            startDate: draft.startDate, endDate: draft.endDate, visibility: draft.visibility,
-            capacity: min(max(draft.capacity, 1), 5), note: draft.note, meetingDetails: draft.meetingDetails, createdAt: now)
+            id: UUID().uuidString, title: draft.title, hostID: me, walk: draft.walk,
+            startDate: draft.startDate, endDate: draft.endDate, visibility: .public,       // a walk is always on the map
+            capacity: min(max(draft.capacity, 1), 5), note: draft.note, meetingDetails: draft.meetingDetails, createdAt: now,
+            hostAnonymous: draft.anonymousHost, hostInterests: draft.anonymousHost ? Array(draft.hostInterests.prefix(4)) : [],
+            mindPrompt: draft.mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : String(draft.mindPrompt.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140)))
         db.activities.append(activity)
         return snapshot()
     }
@@ -220,7 +255,8 @@ actor MockAlongBackend: AlongBackend, DemoService {
             throw AlongError.notAllowed
         }
         db.requests[r].status = .withdrawn
-        db.activities[i].participantIDs.removeAll { $0 == me }
+        let myID = me
+        db.activities[i].participantIDs.removeAll { $0 == myID }
         return snapshot()
     }
 
@@ -253,15 +289,20 @@ actor MockAlongBackend: AlongBackend, DemoService {
     // MARK: Profile
 
     func loadMyProfile() async throws -> MyProfile {
-        MyProfile(user: db.users.first { $0.id == me }!, fullName: nil, hasDisplayName: true, ageConfirmed: true)
+        MyProfile(user: db.users.first { $0.id == me }!, fullName: nil, hasDisplayName: true, ageConfirmed: true,
+                  onboardingCompleted: !LaunchOptions.current.onboarding)
     }
 
     func completeProfile(_ draft: ProfileDraft, fullName: String?) async throws {
         if let i = db.users.firstIndex(where: { $0.id == me }) {
             db.users[i].firstName = draft.displayName
             db.users[i].bio = draft.bio
-            db.users[i].interests = draft.interests
-            db.users[i].alongFor = draft.alongFor
+            db.users[i].hobbies = draft.hobbies
+            db.users[i].instagram = draft.instagram
+            db.users[i].xHandle = draft.xHandle
+            db.users[i].pacePreference = draft.pacePreference
+            db.users[i].preferredDuration = draft.preferredDuration
+            db.users[i].favoriteNeighborhoods = draft.favoriteNeighborhoods
         }
     }
 
@@ -271,6 +312,7 @@ actor MockAlongBackend: AlongBackend, DemoService {
         u.id = me
         u.firstName = String(user.firstName.trimmingCharacters(in: .whitespaces).prefix(24))
         if u.firstName.isEmpty { u.firstName = db.users[i].firstName }
+        u.avatarPath = db.users[i].avatarPath       // the photo has its own write; a profile save never touches it
         db.users[i] = u
         return u
     }
@@ -278,10 +320,24 @@ actor MockAlongBackend: AlongBackend, DemoService {
     func updateSettings(_ settings: UserSettings) async throws { db.settings = settings }
 
     // Avatars need Storage, which only exists with a real backend.
-    nonisolated var supportsAvatars: Bool { false }
-    func uploadAvatar(_ jpeg: Data) async throws -> String { throw AlongError.notConfigured }
-    func deleteAvatar(path: String) async throws {}
-    func avatarURL(path: String) async throws -> URL { throw AlongError.notConfigured }
+    nonisolated var supportsAvatars: Bool { avatarsEnabled }
+    func uploadAvatar(_ jpeg: Data) async throws -> String {
+        guard avatarsEnabled, !failAvatarUpload else { throw AlongError.uploadFailed }
+        guard jpeg.count <= 2_000_000 else { throw AlongError.imageTooLarge }
+        let path = AvatarStoragePath.make(userID: db.meID, now: clock())
+        storedAvatars[path] = jpeg
+        return path
+    }
+    func deleteAvatar(path: String) async throws { storedAvatars[path] = nil }
+    func avatarURL(path: String) async throws -> URL {
+        guard avatarsEnabled, storedAvatars[path] != nil else { throw AlongError.notFound }
+        return URL(string: "https://example.invalid/\(path)")!
+    }
+    func updateAvatarPath(_ path: String?) async throws {
+        guard !failAvatarProfileUpdate else { throw AlongError.generic }
+        guard let i = db.users.firstIndex(where: { $0.id == me }) else { throw AlongError.notFound }
+        db.users[i].avatarPath = path
+    }
 
     // MARK: Safety
 
@@ -347,4 +403,136 @@ actor MockAlongBackend: AlongBackend, DemoService {
         db = SeedData.make(now: clock())
         return snapshot()
     }
+}
+
+// MARK: - Walk sessions (demo only)
+//
+// The demo has no second person, so the *partner* is simulated: they press "I'm ready" and "finish" the moment you do.
+// There is never any fake location data — in demo mode the partner's marker simply reports "location unavailable".
+
+extension MockAlongBackend {
+    private func parties(of activityID: ID) throws -> (host: User, guest: User) {
+        guard let a = db.activities.first(where: { $0.id == activityID }), a.isActive(at: clock()) else { throw AlongError.activityClosed }
+        let guests = db.requests.filter { $0.activityID == activityID && $0.status == .accepted }.map(\.requesterID)
+        // Same order as the server: who you are first, then how many people are in.
+        guard a.hostID == db.meID || guests.contains(db.meID) else { throw AlongError.notAllowed }
+        guard !guests.isEmpty else { throw AlongError.noParticipant }
+        guard guests.count == 1 else { throw AlongError.sessionRequiresTwo }
+        guard let host = db.users.first(where: { $0.id == a.hostID }), let guest = db.users.first(where: { $0.id == guests[0] }) else { throw AlongError.notFound }
+        return (host, guest)
+    }
+
+    private func participant(_ u: User, role: String, joined: Bool) -> WalkSessionParticipant {
+        WalkSessionParticipant(userId: u.id, role: role, displayName: u.firstName, avatarPath: u.avatarPath, joinedAt: joined ? clock() : nil)
+    }
+
+    func openSession(activityID: ID) async throws -> WalkSession {
+        let (host, guest) = try parties(of: activityID)
+        if let i = walkSessions.lastIndex(where: { $0.activityId == activityID }) {
+            if walkSessions[i].status.isOpen || walkSessions[i].status == .completed {
+                let myID = db.meID
+                if let p = walkSessions[i].participants.firstIndex(where: { $0.userId == myID }), walkSessions[i].participants[p].joinedAt == nil {
+                    walkSessions[i].participants[p].joinedAt = clock()
+                }
+                return walkSessions[i]
+            }
+        }
+        // The other person is "there" in the demo, so the session is ready as soon as you open it.
+        let session = WalkSession(id: UUID().uuidString, activityId: activityID, status: .readyToStart,
+                                  participants: [participant(host, role: "host", joined: true), participant(guest, role: "guest", joined: true)])
+        walkSessions.append(session)
+        return session
+    }
+
+    func session(activityID: ID) async throws -> WalkSession? { walkSessions.last { $0.activityId == activityID } }
+
+    private func index(_ sessionID: ID) throws -> Int {
+        guard let i = walkSessions.firstIndex(where: { $0.id == sessionID }) else { throw AlongError.notFound }
+        return i
+    }
+
+    func setReady(sessionID: ID) async throws -> WalkSession {
+        let i = try index(sessionID)
+        if walkSessions[i].status == .active { return walkSessions[i] }
+        guard walkSessions[i].status == .readyToStart || walkSessions[i].status == .awaitingParticipants else { throw AlongError.sessionClosed }
+        let now = clock()
+        for p in walkSessions[i].participants.indices { walkSessions[i].participants[p].readyAt = walkSessions[i].participants[p].readyAt ?? now }
+        walkSessions[i].status = .active
+        walkSessions[i].startedAt = now
+        return walkSessions[i]
+    }
+
+    func setSharing(sessionID: ID, enabled: Bool) async throws -> WalkSession {
+        let i = try index(sessionID)
+        if enabled && walkSessions[i].status != .active { throw AlongError.sessionClosed }
+        if let p = walkSessions[i].participants.firstIndex(where: { $0.userId == db.meID }) {
+            walkSessions[i].participants[p].sharingStoppedAt = enabled ? nil : (walkSessions[i].participants[p].sharingStoppedAt ?? clock())
+        }
+        return walkSessions[i]
+    }
+
+    func finish(sessionID: ID, distanceMeters: Int?) async throws -> WalkSession {
+        let i = try index(sessionID)
+        guard walkSessions[i].status.isLive || walkSessions[i].status == .completed else { throw AlongError.sessionClosed }
+        if walkSessions[i].status == .completed { return walkSessions[i] }
+        let now = clock()
+        let secs = max(Int(now.timeIntervalSince(walkSessions[i].startedAt ?? now)), 0)
+        for p in walkSessions[i].participants.indices {
+            walkSessions[i].participants[p].completionConfirmedAt = walkSessions[i].participants[p].completionConfirmedAt ?? now
+            walkSessions[i].participants[p].sharingStoppedAt = walkSessions[i].participants[p].sharingStoppedAt ?? now
+        }
+        let planned = Int((db.activities.first { $0.id == walkSessions[i].activityId }.map {
+            $0.walk.from.coordinate.distance(to: $0.walk.to.coordinate) } ?? 0).rounded())
+        // Same clamp as the server: at most twice the planned route and 3 m/s.
+        walkSessions[i].distanceMeters = max(min(distanceMeters ?? planned, max(planned * 2, 300), secs * 3), 0)
+        walkSessions[i].durationSeconds = secs
+        walkSessions[i].endedAt = now
+        walkSessions[i].status = .completed
+        return walkSessions[i]
+    }
+
+    func endEarly(sessionID: ID) async throws -> WalkSession {
+        let i = try index(sessionID)
+        guard walkSessions[i].status.isOpen else { return walkSessions[i] }
+        walkSessions[i].status = walkSessions[i].status.isLive ? .endedEarly : .cancelled
+        walkSessions[i].endedAt = clock()
+        return walkSessions[i]
+    }
+
+    // MARK: History
+
+    func history() async throws -> [CompletedWalk] {
+        walkSessions.filter { $0.status == .completed }.compactMap { s -> CompletedWalk? in
+            guard let a = db.activities.first(where: { $0.id == s.activityId }) else { return nil }
+            let prefs = memoryPrefs[s.id] ?? (false, false)
+            return CompletedWalk(id: s.id, title: a.title, startedAt: s.startedAt ?? s.endedAt ?? clock(),
+                                 durationSeconds: s.durationSeconds ?? 0, distanceMeters: s.distanceMeters ?? 0,
+                                 fromLabel: a.walk.from.publicLabel, toLabel: a.walk.to.publicLabel, area: a.walk.from.area,
+                                 partnerName: nil, showOnProfile: prefs.show, revealPartner: prefs.reveal)
+        }.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func stats() async throws -> WalkStats {
+        let done = walkSessions.filter { $0.status == .completed }
+        return WalkStats(walks: done.count, distanceMeters: done.reduce(0) { $0 + ($1.distanceMeters ?? 0) },
+                         durationSeconds: done.reduce(0) { $0 + ($1.durationSeconds ?? 0) })
+    }
+
+    func publicStats(userID: ID) async throws -> WalkStats? { userID == db.meID ? try await stats() : nil }
+
+    func setMemoryPrefs(sessionID: ID, showOnProfile: Bool?, revealPartner: Bool?) async throws {
+        var p = memoryPrefs[sessionID] ?? (false, false)
+        if let showOnProfile { p.show = showOnProfile }
+        if let revealPartner { p.reveal = revealPartner }
+        memoryPrefs[sessionID] = p
+    }
+}
+
+/// Demo-mode live channel: connects to nothing and receives nothing. (Never fabricates positions.)
+actor MockLiveWalkService: LiveWalkService {
+    func connect(sessionID: ID, myID: ID) async throws -> LiveWalkStreams {
+        LiveWalkStreams(positions: AsyncStream { $0.finish() }, sessionChanged: AsyncStream { _ in }, connectionLost: AsyncStream { _ in })
+    }
+    func publish(_ position: LivePosition) async {}
+    func disconnect() async {}
 }

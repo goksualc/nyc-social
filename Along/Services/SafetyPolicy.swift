@@ -19,7 +19,7 @@ enum SafetyPolicy {
         .init(title: "Block and report", detail: "Blocking hides people from discovery, requests and chats. Reports are stored locally."),
         .init(title: "Expired plans", detail: "Plans disappear from the map when they end."),
         .init(title: "18+ confirmation", detail: "A self-declared checkbox during onboarding."),
-        .init(title: "Manhattan only", detail: "Locations are checked against an approximate island boundary."),
+        .init(title: "New York City only", detail: "Locations are checked against the five boroughs' outlines."),
     ]
 
     static let requiredBeforeProduction: [Item] = [

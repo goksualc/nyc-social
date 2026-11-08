@@ -55,6 +55,14 @@ final class AppStore {
     // Chat history paging
     private(set) var historyExhausted: Set<ID> = []
 
+    /// Live positions between two walkers (a no-op channel in demo mode).
+    var live: (any LiveWalkService)?
+    /// Walk sessions and history share the data backend.
+    var walks: any (WalkSessionService & WalkHistoryService) { backend }
+
+    /// When I last opened each conversation. Stored on this device only: it drives the unread dot and the Unread filter.
+    private(set) var lastRead: [ID: Date] = [:]
+
     /// Called when the server says the session is no longer valid.
     var onSessionExpired: (() -> Void)?
 
@@ -63,6 +71,7 @@ final class AppStore {
         self.realtime = realtime
         self.snapshot = snapshot
         self.avatars = AvatarLoader { path in try await backend.avatarURL(path: path) }
+        self.lastRead = Self.loadLastRead(for: snapshot.me.id)
     }
 
     static func bootstrap(backend: any AlongBackend = MockAlongBackend(), realtime: (any RealtimeService)? = nil) async throws -> AppStore {
@@ -140,6 +149,13 @@ final class AppStore {
         }
     }
 
+    /// Route search: PostGIS ranks the walks; the hosts on the cards are cached for display like any discovery result.
+    func searchAlongRoute(_ query: RouteSearchQuery) async throws -> [RouteMatch] {
+        let found = try await backend.searchAlongRoute(query)
+        merge(hosts: found.map(\.host))
+        return found
+    }
+
     func loadMoreDiscovery() async {
         guard hasMoreDiscovery, discoveryState == .loaded, var q = lastQuery else { return }
         q.offset = discovered.count
@@ -187,6 +203,28 @@ final class AppStore {
     }
     var pendingIncomingCount: Int {
         incomingRequests.filter { $0.status == .pending && activity($0.activityID)?.isActive(at: now) == true }.count
+    }
+
+    // MARK: Unread (per device)
+
+    private static func readKey(_ userID: ID) -> String { "along.lastRead.\(userID)" }
+    private static func loadLastRead(for userID: ID) -> [ID: Date] {
+        let raw = UserDefaults.standard.dictionary(forKey: readKey(userID)) as? [String: Double] ?? [:]
+        return raw.mapValues { Date(timeIntervalSince1970: $0) }
+    }
+
+    /// Their latest message is newer than the last time I opened this chat.
+    func isUnread(_ c: Conversation) -> Bool {
+        guard let last = lastMessage(in: c), last.senderID != me.id else { return false }
+        return last.sentAt > (lastRead[c.id] ?? .distantPast)
+    }
+    var unreadConversationCount: Int { snapshot.conversations.filter(isUnread).count }
+
+    func markRead(_ c: Conversation) {
+        let latest = lastMessage(in: c)?.sentAt ?? .now
+        guard (lastRead[c.id] ?? .distantPast) < latest else { return }
+        lastRead[c.id] = latest
+        UserDefaults.standard.set(lastRead.mapValues { $0.timeIntervalSince1970 }, forKey: Self.readKey(me.id))
     }
 
     func conversations() -> [Conversation] {
@@ -311,8 +349,7 @@ final class AppStore {
 
     @discardableResult
     func create(_ draft: ActivityDraft) async -> Bool {
-        let failure = draft.details.isWalk ? "Couldn't publish your walk. Try again." : "Couldn't publish your session. Try again."
-        let ok = await apply(failure: failure) { try await backend.createActivity(draft) }
+        let ok = await apply(failure: "Couldn't publish your walk. Try again.") { try await backend.createActivity(draft) }
         if ok {
             Haptics.success()
             showToast(draft.visibility == .public ? "Published. It's on the map." : "Saved to your plans")
@@ -398,9 +435,15 @@ final class AppStore {
 
     func updateProfile(_ user: User, silent: Bool = false) async {
         let previous = snapshot.me
+        // The photo is changed only by `setAvatar` / `removeAvatar`. An edit form holds a copy of the profile from when it
+        // opened, so its photo may be out of date; never let saving the form put an old photo back.
+        var user = user
+        user.avatarPath = previous.avatarPath
         snapshot.me = user                                          // optimistic; rolled back on failure
         do {
-            snapshot.me = try await backend.updateProfile(user)
+            var saved = try await backend.updateProfile(user)
+            saved.avatarPath = snapshot.me.avatarPath
+            snapshot.me = saved
             if !silent { showToast("Profile saved") }
         } catch {
             snapshot.me = previous
@@ -408,29 +451,44 @@ final class AppStore {
         }
     }
 
-    /// Uploads a new profile photo (already resized JPEG) and points the profile at it.
+    /// True while a photo is uploading or being removed (drives the spinner on the avatar).
+    private(set) var isUpdatingAvatar = false
+
+    /// Uploads a new profile photo (already resized JPEG), points the profile at it, and shows it straight away.
+    /// Order matters: upload → write `avatar_url` → switch the UI → delete the old file. If the profile write fails the
+    /// just-uploaded file is removed again so nothing is orphaned, and the person keeps their current photo.
     func setAvatar(jpeg: Data) async -> Bool {
+        guard !isUpdatingAvatar else { return false }
+        isUpdatingAvatar = true
+        defer { isUpdatingAvatar = false }
         let old = me.avatarPath
+        var uploaded: String?
         do {
             let path = try await backend.uploadAvatar(jpeg)
+            uploaded = path
+            try await backend.updateAvatarPath(path)
             var u = me
             u.avatarPath = path
-            snapshot.me = try await backend.updateProfile(u)
+            snapshot.me = u
             if let old { avatars.invalidate(old); try? await backend.deleteAvatar(path: old) }
             showToast("Photo updated")
             return true
         } catch {
-            fail(error, "Couldn't upload your photo. Try again.")
+            if let uploaded { try? await backend.deleteAvatar(path: uploaded) }
+            fail(error, "Couldn't update your photo. Try again.")
             return false
         }
     }
 
     func removeAvatar() async {
-        guard let old = me.avatarPath else { return }
-        var u = me
-        u.avatarPath = nil
+        guard let old = me.avatarPath, !isUpdatingAvatar else { return }
+        isUpdatingAvatar = true
+        defer { isUpdatingAvatar = false }
         do {
-            snapshot.me = try await backend.updateProfile(u)
+            try await backend.updateAvatarPath(nil)
+            var u = me
+            u.avatarPath = nil
+            snapshot.me = u
             avatars.invalidate(old)
             try? await backend.deleteAvatar(path: old)
         } catch { fail(error, "Couldn't remove your photo.") }
@@ -589,6 +647,3 @@ final class AppStore {
     }
 }
 
-extension ActivityDetails {
-    var isWalk: Bool { if case .walk = self { true } else { false } }
-}

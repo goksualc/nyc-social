@@ -1,41 +1,23 @@
 import Foundation
 import CoreLocation
 
-enum ActivityKind: String, Codable, Sendable, CaseIterable {
-    case walk, cowork
-
-    var label: String { self == .walk ? "Walk" : "Cowork" }
-    var symbol: String { self == .walk ? "figure.walk" : "laptopcomputer" }
+enum ConversationTopic: String, CaseIterable, Codable, Sendable, Identifiable {
+    case lifeLately = "Life Lately", career = "Career", relationships = "Relationships"
+    case existential = "Existential Thoughts", random = "Random Thoughts", anything = "Anything, Really"
+    var id: String { rawValue }
+    var dbValue: String {
+        switch self {
+        case .lifeLately: "life_lately"; case .career: "career"; case .relationships: "relationships"
+        case .existential: "existential"; case .random: "random"; case .anything: "anything"
+        }
+    }
+    init?(dbValue: String) { if let t = Self.allCases.first(where: { $0.dbValue == dbValue }) { self = t } else { return nil } }
 }
 
 enum Pace: String, CaseIterable, Codable, Sendable, Identifiable {
     case casual = "Casual", moderate = "Moderate", fast = "Fast"
     var id: String { rawValue }
     var dbValue: String { rawValue.lowercased() }
-}
-
-enum WorkStyle: String, CaseIterable, Codable, Sendable, Identifiable {
-    case deepWork = "Deep Work", social = "Social", buildTogether = "Build Together"
-    var id: String { rawValue }
-    var dbValue: String {
-        switch self { case .deepWork: "deep_work"; case .social: "social"; case .buildTogether: "build_together" }
-    }
-    init?(dbValue: String) {
-        switch dbValue {
-        case "deep_work": self = .deepWork
-        case "social": self = .social
-        case "build_together": self = .buildTogether
-        default: return nil
-        }
-    }
-    /// Wording used on cards, e.g. "Focused work".
-    var cardLabel: String {
-        switch self {
-        case .deepWork: "Focused work"
-        case .social: "Social coworking"
-        case .buildTogether: "Build together"
-        }
-    }
 }
 
 enum Visibility: String, CaseIterable, Codable, Sendable, Identifiable {
@@ -50,21 +32,11 @@ struct WalkInfo: Hashable, Codable, Sendable {
     var pace: Pace
 }
 
-struct CoworkInfo: Hashable, Codable, Sendable {
-    var venue: Place
-    var style: WorkStyle
-}
-
-enum ActivityDetails: Hashable, Codable, Sendable {
-    case walk(WalkInfo)
-    case cowork(CoworkInfo)
-}
-
 struct Activity: Identifiable, Hashable, Codable, Sendable {
     var id: ID
     var title: String
     var hostID: ID
-    var details: ActivityDetails
+    var walk: WalkInfo
     var startDate: Date
     var endDate: Date
     var visibility: Visibility
@@ -81,12 +53,13 @@ struct Activity: Identifiable, Hashable, Codable, Sendable {
     var hasPreciseAccess: Bool = false
     var isCancelled = false
     var createdAt: Date = .now
-
-    var kind: ActivityKind {
-        if case .walk = details { .walk } else { .cowork }
-    }
-    var walk: WalkInfo? { if case .walk(let w) = details { w } else { nil } }
-    var cowork: CoworkInfo? { if case .cowork(let c) = details { c } else { nil } }
+    /// The organizer chose to stay anonymous: the walk is public, their identity is not. `hostID` is then an opaque
+    /// `anon:` alias for everyone except the organizer, and no profile can be looked up from it.
+    var hostAnonymous = false
+    /// The few interests an anonymous organizer chose to show (shown instead of a profile).
+    var hostInterests: [String] = []
+    /// The optional "What's on your mind?" the host wrote. Shown naturally on the walk; never a category.
+    var mindPrompt: String?
 
     var spotsLeft: Int { max(capacity - (participantCount ?? participantIDs.count), 0) }
     var isFull: Bool { spotsLeft == 0 }
@@ -94,20 +67,10 @@ struct Activity: Identifiable, Hashable, Codable, Sendable {
     func isExpired(at now: Date) -> Bool { endDate <= now }
     func isActive(at now: Date) -> Bool { !isCancelled && !isExpired(at: now) }
 
-    /// Public, general location text: "72nd St → 55th St" or "SoHo · Coffee shop".
-    var publicLocationLabel: String {
-        switch details {
-        case .walk(let w): "\(w.from.publicLabel) → \(w.to.publicLabel)"
-        case .cowork(let c): "\(c.venue.area) · Coffee shop"
-        }
-    }
+    /// Public, general location text: "72nd St → 55th St".
+    var publicLocationLabel: String { "\(walk.from.publicLabel) → \(walk.to.publicLabel)" }
 
-    var detailLabel: String {
-        switch details {
-        case .walk(let w): "\(w.pace.rawValue) walk"
-        case .cowork(let c): c.style.cardLabel
-        }
-    }
+    var detailLabel: String { "\(walk.pace.rawValue) walk" }
 
     var spotsLabel: String {
         switch spotsLeft {
@@ -118,17 +81,9 @@ struct Activity: Identifiable, Hashable, Codable, Sendable {
     }
 
     /// Where the marker sits on the map (already approximate for non-members).
-    var mapCoordinate: CLLocationCoordinate2D {
-        switch details {
-        case .walk(let w): w.from.coordinate.cl
-        case .cowork(let c): c.venue.coordinate.cl
-        }
-    }
+    var mapCoordinate: CLLocationCoordinate2D { walk.from.coordinate.cl }
 
-    var routeEndpoints: (CLLocationCoordinate2D, CLLocationCoordinate2D)? {
-        guard let w = walk else { return nil }
-        return (w.from.coordinate.cl, w.to.coordinate.cl)
-    }
+    var routeEndpoints: (CLLocationCoordinate2D, CLLocationCoordinate2D) { (walk.from.coordinate.cl, walk.to.coordinate.cl) }
 }
 
 // MARK: - Requests & messaging
@@ -148,6 +103,8 @@ struct JoinRequest: Identifiable, Hashable, Codable, Sendable {
 struct Conversation: Identifiable, Hashable, Codable, Sendable {
     var id: ID
     var activityID: ID
+    /// Set when the organizer opened the chat while the request was still pending.
+    var requestID: ID?
     /// Always exactly two people: the host and one accepted guest.
     var participantIDs: [ID]
     var createdAt: Date = .now

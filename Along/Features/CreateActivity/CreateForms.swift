@@ -11,23 +11,27 @@ struct CreateWalkView: View {
     enum Slot: String, Identifiable { case from, to; var id: String { rawValue } }
 
     var body: some View {
-        FormScaffold(title: "Create a walk", cta: "Publish Walk", isEnabled: vm.walkIsValid, isLoading: vm.isPublishing) {
+        FormScaffold(title: "", cta: "Publish Walk", isEnabled: vm.walkIsValid, isLoading: vm.isPublishing) {
             Task { if await vm.publishWalk() { onPublished() } }
         } content: {
-            AlongFieldRow(label: "From", value: vm.from?.publicLabel, placeholder: "Starting street or place", symbol: "location") { picking = .from }
-            AlongFieldRow(label: "To", value: vm.to?.publicLabel, placeholder: "Where are you headed?", symbol: "flag") { picking = .to }
+            Text("Where are we walking?")
+                .font(AlongFont.walkScreenHeading).foregroundStyle(AlongColor.textPrimary)
+            AlongFieldRow(label: "Starting location", value: vm.from?.publicLabel, placeholder: "Starting street or place", symbol: "location") { picking = .from }
+            AlongFieldRow(label: "Destination", value: vm.to?.publicLabel, placeholder: "Where are you headed?", symbol: "flag") { picking = .to }
             if let hint = vm.walkHint { Text(hint).font(AlongFont.caption).foregroundStyle(AlongColor.destructive) }
             routePreview
-            WhenField(label: "When", date: $vm.start)
-            OptionField(label: "Pace", options: Pace.allCases.map(\.rawValue), selection: Binding(
+            WhenField(label: "Date & time", date: $vm.start)
+            OptionField(label: "Walking pace", options: Pace.allCases.map(\.rawValue), selection: Binding(
                 get: { Pace.allCases.firstIndex(of: vm.pace) ?? 0 }, set: { vm.pace = Pace.allCases[$0] }))
-            SpotsField(spots: $vm.spots)
-            AlongTextField(label: "A little note", text: $vm.note, prompt: "Optional", axis: .vertical, lines: 1...3, limit: 140)
+            SpotsField(label: "Available spots", spots: $vm.spots)
+            AlongTextField(label: "Description", text: $vm.note, prompt: "Optional", axis: .vertical, lines: 1...3, limit: 140)
+            AlongTextField(label: "What's on your mind?", text: $vm.mindPrompt, prompt: "Life, work, random thoughts... anything really.",
+                           axis: .vertical, lines: 1...3, limit: 140)
             AlongTextField(label: "Meeting spot", text: $vm.meetingDetails, prompt: "Shared only after you accept someone", axis: .vertical, lines: 1...3, limit: 140)
-            VisibilityField(visibility: $vm.visibility)
+            HostVisibilityField(vm: vm)
         }
         .sheet(item: $picking) { slot in
-            PlaceSearchView(mode: .places, title: slot == .from ? "Starting point" : "Destination") { place in
+            PlaceSearchView(title: slot == .from ? "Starting point" : "Destination") { place in
                 if slot == .from { vm.from = place } else { vm.to = place }
             }
             .presentationDetents([.large])
@@ -38,7 +42,7 @@ struct CreateWalkView: View {
     }
 
     @ViewBuilder private var routePreview: some View {
-        if let from = vm.from, let to = vm.to, vm.walkIsValid {
+        if let from = vm.from, let to = vm.to, vm.routeIsValid {
             VStack(alignment: .leading, spacing: AlongSpacing.xs) {
                 Map(position: $vm.routeCamera, interactionModes: []) {
                     MapPolyline(coordinates: (vm.route?.coordinates ?? [from.coordinate, to.coordinate]).map(\.cl))
@@ -56,46 +60,6 @@ struct CreateWalkView: View {
                     .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
             }
             .transition(.opacity)
-        }
-    }
-}
-
-// MARK: - Cowork
-
-struct CreateCoworkView: View {
-    @Bindable var vm: CreateActivityViewModel
-    let onPublished: () -> Void
-    @State private var picking = false
-
-    var body: some View {
-        FormScaffold(title: "Create a session", cta: "Publish Session", isEnabled: vm.coworkIsValid, isLoading: vm.isPublishing) {
-            Task { if await vm.publishCowork() { onPublished() } }
-        } content: {
-            AlongFieldRow(label: "Where", value: vm.venue?.name, placeholder: "Search for a café", symbol: "cup.and.saucer") { picking = true }
-            if let venue = vm.venue {
-                Label("Public listing will say “\(venue.area) · Coffee shop”.", systemImage: "eye.slash")
-                    .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
-            }
-            WhenField(label: "When", date: $vm.start)
-            VStack(alignment: .leading, spacing: AlongSpacing.xs) {
-                Text("Until").font(AlongFont.label).foregroundStyle(AlongColor.textTertiary)
-                DatePicker("Until", selection: Binding(get: { vm.end }, set: { vm.end = $0 }),
-                           in: vm.start.addingTimeInterval(15 * 60)..., displayedComponents: .hourAndMinute)
-                    .labelsHidden().datePickerStyle(.compact).tint(AlongColor.navy)
-                    .frame(maxWidth: .infinity, minHeight: AlongSize.minTouch, alignment: .leading)
-            }
-            OptionField(label: "Work style", options: WorkStyle.allCases.map(\.rawValue), selection: Binding(
-                get: { WorkStyle.allCases.firstIndex(of: vm.style) ?? 0 }, set: { vm.style = WorkStyle.allCases[$0] }))
-            SpotsField(spots: $vm.spots)
-            AlongTextField(label: "Working on", text: $vm.note, prompt: "Optional", axis: .vertical, lines: 1...3, limit: 140)
-            AlongTextField(label: "Meeting spot", text: $vm.meetingDetails, prompt: "Where to find you — shared only after you accept", axis: .vertical, lines: 1...3, limit: 140)
-            VisibilityField(visibility: $vm.visibility)
-        }
-        .sheet(isPresented: $picking) {
-            PlaceSearchView(mode: .cafes, title: "Find a café") { vm.venue = $0 }
-                .presentationDetents([.large])
-                .presentationCornerRadius(AlongRadius.sheet)
-                .presentationBackground(AlongColor.offWhite)
         }
     }
 }
@@ -159,20 +123,50 @@ struct OptionField: View {
 }
 
 struct SpotsField: View {
+    var label = "Spots"
     @Binding var spots: Int
     var body: some View {
-        OptionField(label: "Spots", options: ["1", "2", "3", "4", "5"], selection: Binding(get: { spots - 1 }, set: { spots = $0 + 1 }))
+        OptionField(label: label, options: ["1", "2", "3", "4", "5"], selection: Binding(get: { spots - 1 }, set: { spots = $0 + 1 }))
     }
 }
 
-struct VisibilityField: View {
-    @Binding var visibility: Visibility
+/// Public: your profile shows. Private: the walk is still on the map for everyone, but you appear as "Anonymous Walker".
+struct HostVisibilityField: View {
+    @Bindable var vm: CreateActivityViewModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: AlongSpacing.xs) {
             OptionField(label: "Visibility", options: Visibility.allCases.map(\.rawValue), selection: Binding(
-                get: { Visibility.allCases.firstIndex(of: visibility) ?? 0 }, set: { visibility = Visibility.allCases[$0] }))
-            Text(visibility == .public ? "Shown on the map to people in Manhattan, with approximate locations." : "Private plans stay off the map. Only you can see them.")
+                get: { Visibility.allCases.firstIndex(of: vm.visibility) ?? 0 }, set: { vm.visibility = Visibility.allCases[$0] }))
+            Text(vm.hidesIdentity ? "Your walk will appear on the map, but your identity will remain hidden."
+                                  : "Your profile will be visible to people exploring this walk.")
                 .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+            Text("Private walks are still visible to everyone. Only your identity is hidden.")
+                .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+
+            if vm.hidesIdentity {
+                VStack(alignment: .leading, spacing: AlongSpacing.xs) {
+                    Text("Interests to show instead of a profile").font(AlongFont.label).foregroundStyle(AlongColor.textTertiary)
+                    if vm.myHobbies.isEmpty {
+                        Text("Add interests to your profile and you can show a few of them here. People will only see the ones you pick.")
+                            .font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                    } else {
+                        FlowLayout(spacing: 8) {
+                            ForEach(vm.myHobbies, id: \.self) { hobby in
+                                Button { Haptics.selection(); vm.toggleInterest(hobby) } label: {
+                                    AlongChip(title: hobby, isSelected: vm.hostInterests.contains(hobby)).frame(minHeight: AlongSize.minTouch)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityAddTraits(vm.hostInterests.contains(hobby) ? .isSelected : [])
+                            }
+                        }
+                        Text("Up to four. Your name, photo, socials and bio stay hidden.").font(AlongFont.caption).foregroundStyle(AlongColor.textTertiary)
+                    }
+                }
+                .padding(.top, AlongSpacing.xs)
+                .transition(.opacity)
+            }
         }
+        .alongAnimation(value: vm.hidesIdentity)
     }
 }

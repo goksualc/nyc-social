@@ -18,7 +18,6 @@ struct AuthLinkResult: Equatable {
 protocol AuthService: Sendable {
     /// Restores a persisted session (Keychain). `nil` when signed out.
     func restoreSession() async throws -> AuthSession?
-    func signInWithApple(idToken: String, nonce: String) async throws -> AuthSession
     /// Google through Supabase OAuth (PKCE) in a system `ASWebAuthenticationSession`. Cancellation throws `.cancelled`.
     func signInWithGoogle() async throws -> AuthSession
     func signIn(email: String, password: String) async throws -> AuthSession
@@ -42,6 +41,8 @@ protocol ProfileService: Sendable {
     func loadMyProfile() async throws -> MyProfile
     func completeProfile(_ draft: ProfileDraft, fullName: String?) async throws
     func updateProfile(_ user: User) async throws -> User
+    /// Points the profile at a stored photo (or clears it). Touches `avatar_url` only, never any other profile field.
+    func updateAvatarPath(_ path: String?) async throws
     func updateSettings(_ settings: UserSettings) async throws
 }
 
@@ -49,7 +50,9 @@ protocol ActivityService: Sendable {
     /// The user's own world: hosted + requested plans, requests, chats, blocks.
     func loadSnapshot() async throws -> AlongSnapshot
     func discover(_ query: DiscoveryQuery) async throws -> DiscoveryPage
-    func nearby(to center: Coordinate, radiusMeters: Double, kind: ActivityKind?, limit: Int) async throws -> DiscoveryPage
+    func nearby(to center: Coordinate, radiusMeters: Double, limit: Int) async throws -> DiscoveryPage
+    /// Public walks whose route runs along the given one, ranked by overlap, proximity, direction, time and spots.
+    func searchAlongRoute(_ query: RouteSearchQuery) async throws -> [RouteMatch]
     func createActivity(_ draft: ActivityDraft) async throws -> AlongSnapshot
     func updateActivity(_ edit: ActivityEdit) async throws -> AlongSnapshot
     func cancelActivity(id: ID) async throws -> AlongSnapshot
@@ -84,6 +87,26 @@ protocol SafetyService: Sendable {
     func report(_ target: ReportTarget, reason: ReportReason) async throws
 }
 
+/// The shared two-person walk: readiness, start, finish. Every transition is decided by the server.
+protocol WalkSessionService: Sendable {
+    /// Opens (or returns) the session for a plan the caller hosts or has been accepted into.
+    func openSession(activityID: ID) async throws -> WalkSession
+    func session(activityID: ID) async throws -> WalkSession?
+    func setReady(sessionID: ID) async throws -> WalkSession
+    func setSharing(sessionID: ID, enabled: Bool) async throws -> WalkSession
+    func finish(sessionID: ID, distanceMeters: Int?) async throws -> WalkSession
+    func endEarly(sessionID: ID) async throws -> WalkSession
+}
+
+/// Completed walks and their privacy controls.
+protocol WalkHistoryService: Sendable {
+    func history() async throws -> [CompletedWalk]
+    func stats() async throws -> WalkStats
+    /// Someone else's totals, or nil unless they chose to show them.
+    func publicStats(userID: ID) async throws -> WalkStats?
+    func setMemoryPrefs(sessionID: ID, showOnProfile: Bool?, revealPartner: Bool?) async throws
+}
+
 /// Prototype-only helpers so one person can explore both sides of every flow (mock backend only).
 protocol DemoService: Sendable {
     func simulateHostResponse(activityID: ID) async -> AlongSnapshot
@@ -93,6 +116,21 @@ protocol DemoService: Sendable {
 
 /// Everything the UI's data layer needs once a user is signed in.
 typealias AlongBackend = ProfileService & ActivityService & JoinRequestService & MessagingService & StorageService & SafetyService
+    & WalkSessionService & WalkHistoryService
+
+/// Live positions between the two walkers, over a private Realtime channel that the server authorises per participant.
+protocol LiveWalkService: Sendable {
+    /// Joins the session's channel. Yields the *other* walker's positions and, separately, a tick whenever the session row changes.
+    func connect(sessionID: ID, myID: ID) async throws -> LiveWalkStreams
+    func publish(_ position: LivePosition) async
+    func disconnect() async
+}
+
+struct LiveWalkStreams: Sendable {
+    var positions: AsyncStream<LivePosition>
+    var sessionChanged: AsyncStream<Void>
+    var connectionLost: AsyncStream<Void>
+}
 
 /// Live updates pushed from the server. Nothing here exists in demo mode.
 protocol RealtimeService: Sendable {
